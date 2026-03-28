@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Health Helper</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #f8fafc; color: #1e293b;
+      min-height: 100vh; overflow-x: hidden;
+    }
+    #root { min-height: 100vh; }
+    @keyframes fadeUp   { from{opacity:0;transform:translateY(30px);}to{opacity:1;transform:translateY(0);} }
+    @keyframes fadeIn   { from{opacity:0;}to{opacity:1;} }
+    @keyframes scaleIn  { from{opacity:0;transform:scale(0.8);}to{opacity:1;transform:scale(1);} }
+    @keyframes float    { 0%,100%{transform:translateY(0);}50%{transform:translateY(-12px);} }
+    @keyframes checkDraw{ from{stroke-dashoffset:24;}to{stroke-dashoffset:0;} }
+    @keyframes spin     { to{transform:rotate(360deg);} }
+    @keyframes blob     { 0%,100%{transform:translate(0,0) scale(1);}25%{transform:translate(30px,-50px) scale(1.05);}50%{transform:translate(-20px,20px) scale(0.95);}75%{transform:translate(15px,40px) scale(1.02);} }
+    @keyframes scanline { 0%{top:10%;}50%{top:85%;}100%{top:10%;} }
+    @keyframes pulse    { 0%,100%{opacity:1;}50%{opacity:0.5;} }
+    .fade-up    { animation: fadeUp 0.7s ease-out both; }
+    .fade-up-d1 { animation: fadeUp 0.7s ease-out 0.1s both; }
+    .fade-up-d2 { animation: fadeUp 0.7s ease-out 0.2s both; }
+    .fade-up-d3 { animation: fadeUp 0.7s ease-out 0.3s both; }
+    .fade-up-d4 { animation: fadeUp 0.7s ease-out 0.4s both; }
+    .fade-in    { animation: fadeIn 0.6s ease-out both; }
+    .scale-in   { animation: scaleIn 0.5s ease-out both; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+    const API = window.location.origin + "/api";
+
+    /* ── Background ── */
+    function AnimatedBG() {
+      return (
+        <div style={{position:"fixed",inset:0,zIndex:0,overflow:"hidden",pointerEvents:"none"}}>
+          <div style={{position:"absolute",top:"-15%",left:"-5%",width:"55%",height:"55%",background:"radial-gradient(circle,rgba(37,99,235,0.08) 0%,transparent 70%)",filter:"blur(80px)",animation:"blob 18s ease-in-out infinite"}}/>
+          <div style={{position:"absolute",bottom:"-10%",right:"-8%",width:"50%",height:"50%",background:"radial-gradient(circle,rgba(220,38,38,0.06) 0%,transparent 70%)",filter:"blur(80px)",animation:"blob 22s ease-in-out infinite 4s"}}/>
+          <div style={{position:"absolute",top:"35%",left:"55%",width:"40%",height:"40%",background:"radial-gradient(circle,rgba(37,99,235,0.05) 0%,transparent 70%)",filter:"blur(80px)",animation:"blob 20s ease-in-out infinite 8s"}}/>
+          <div style={{position:"absolute",inset:0,backgroundImage:"radial-gradient(circle,rgba(37,99,235,0.06) 1px,transparent 1px)",backgroundSize:"32px 32px"}}/>
+        </div>
+      );
+    }
+
+    /* ── Card ── */
+    function Card({children, style={}, className=""}) {
+      return <div className={className} style={{background:"rgba(255,255,255,0.85)",backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",border:"1px solid rgba(37,99,235,0.1)",borderRadius:"24px",boxShadow:"0 4px 40px rgba(37,99,235,0.06), 0 1px 3px rgba(0,0,0,0.04)",...style}}>{children}</div>;
+    }
+
+    /* ── Button ── */
+    function PrimaryButton({children, onClick, disabled, variant="blue", style={}}) {
+      const [hover, setHover] = useState(false);
+      const g={blue:"linear-gradient(135deg,#2563eb,#3b82f6,#60a5fa)",red:"linear-gradient(135deg,#dc2626,#ef4444,#f87171)"};
+      const s={blue:"0 8px 30px rgba(37,99,235,0.35)",red:"0 8px 30px rgba(220,38,38,0.35)"};
+      return (
+        <button onClick={onClick} disabled={disabled} onMouseEnter={()=>setHover(true)} onMouseLeave={()=>setHover(false)}
+          style={{width:"100%",padding:"20px 32px",fontSize:"20px",fontWeight:700,color:"#fff",background:disabled?"#cbd5e1":g[variant],border:"none",borderRadius:"16px",cursor:disabled?"not-allowed":"pointer",transition:"all 0.3s ease",transform:hover&&!disabled?"translateY(-2px)":"translateY(0)",boxShadow:hover&&!disabled?s[variant]:"0 2px 8px rgba(0,0,0,0.06)",opacity:disabled?0.6:1,letterSpacing:"0.3px",...style}}>
+          {children}
+        </button>
+      );
+    }
+
+    /* ── Phone Input ── */
+    function PhoneInput({value, onChange}) {
+      const [focused, setFocused] = useState(false);
+      const fmt=(r)=>{const d=r.replace(/\D/g,"").slice(0,10);if(!d)return"";if(d.length<=3)return`(${d}`;if(d.length<=6)return`(${d.slice(0,3)}) ${d.slice(3)}`;return`(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;};
+      return (
+        <div style={{borderRadius:"16px",padding:"2px",background:focused?"linear-gradient(135deg,#2563eb,#60a5fa)":"#e2e8f0",transition:"all 0.3s ease"}}>
+          <input type="tel" inputMode="numeric" value={fmt(value)} onChange={e=>onChange(e.target.value.replace(/\D/g,"").slice(0,10))} onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)} placeholder="(555) 123-4567"
+            style={{width:"100%",padding:"20px 24px",fontSize:"26px",fontWeight:600,letterSpacing:"1.5px",border:"none",borderRadius:"14px",textAlign:"center",outline:"none",color:"#1e293b",background:"#fff",caretColor:"#2563eb"}}/>
+        </div>
+      );
+    }
+
+    /* ── Code Input ── */
+    function CodeInput({value, onChange, onComplete}) {
+      const refs=[useRef(),useRef(),useRef(),useRef()];
+      const digits=value.padEnd(4," ").split("");
+      const handleChange=(i,e)=>{const v=e.target.value.replace(/\D/g,"");if(!v)return;const nd=[...value.split("")];nd[i]=v[v.length-1];const nv=nd.join("");onChange(nv);if(i<3)refs[i+1].current?.focus();if(nv.length===4&&i===3)onComplete(nv);};
+      const handleKey=(i,e)=>{if(e.key==="Backspace"){e.preventDefault();const nd=[...value.split("")];if(nd[i]){nd[i]="";onChange(nd.join(""));}else if(i>0){refs[i-1].current?.focus();nd[i-1]="";onChange(nd.join(""));}}};
+      useEffect(()=>{refs[0].current?.focus();},[]);
+      return (
+        <div style={{display:"flex",gap:"14px",justifyContent:"center"}}>
+          {[0,1,2,3].map(i=>{const filled=digits[i]?.trim();return(
+            <div key={i} style={{borderRadius:"16px",padding:"2px",background:filled?"linear-gradient(135deg,#2563eb,#3b82f6)":"#e2e8f0",transition:"all 0.3s ease"}}>
+              <input ref={refs[i]} type="tel" inputMode="numeric" maxLength={1} value={filled||""} onChange={e=>handleChange(i,e)} onKeyDown={e=>handleKey(i,e)}
+                style={{width:"68px",height:"82px",fontSize:"36px",fontWeight:700,textAlign:"center",border:"none",borderRadius:"14px",outline:"none",color:"#1e293b",background:"#fff",caretColor:"#2563eb"}}/>
+            </div>
+          );})}
+        </div>
+      );
+    }
+
+    /* ── Feature Card ── */
+    function FeatureCard({icon,title,desc,color,delay}) {
+      const [hover,setHover]=useState(false);
+      return (
+        <Card className={`fade-up-d${delay}`} style={{padding:"32px 24px",textAlign:"center",flex:1,minWidth:"160px",maxWidth:"220px",cursor:"default",transition:"all 0.3s ease",transform:hover?"translateY(-6px)":"translateY(0)",boxShadow:hover?"0 16px 48px rgba(37,99,235,0.12)":"0 2px 12px rgba(0,0,0,0.04)"}}>
+          <div onMouseEnter={()=>setHover(true)} onMouseLeave={()=>setHover(false)} style={{height:"100%"}}>
+            <div style={{width:"56px",height:"56px",borderRadius:"16px",margin:"0 auto 16px",background:color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"26px",animation:"float 4s ease-in-out infinite",color:"#fff"}}>{icon}</div>
+            <div style={{fontSize:"17px",fontWeight:700,color:"#1e293b",marginBottom:"6px"}}>{title}</div>
+            <div style={{fontSize:"14px",color:"#94a3b8",lineHeight:1.5}}>{desc}</div>
+          </div>
+        </Card>
+      );
+    }
+
+    /* ── Spinner ── */
+    function Spinner({size=20}){return <span style={{width:size+"px",height:size+"px",border:"3px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin 0.6s linear infinite"}}/>;}
+
+    /* ═══════════════════════════════════════════════
+       EXTRACT CARD DATA FROM OCR TEXT
+       ═══════════════════════════════════════════════ */
+    function extractCardData(text) {
+      const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+      const fullText = text.toUpperCase();
+
+      // Detect plan type
+      let planType = "Insurance Card";
+      if (fullText.includes("MEDICARE")) planType = "Medicare";
+      else if (fullText.includes("MEDICAID")) planType = "Medicaid";
+      else if (fullText.includes("BLUE CROSS") || fullText.includes("BCBS")) planType = "Blue Cross Blue Shield";
+      else if (fullText.includes("AETNA")) planType = "Aetna";
+      else if (fullText.includes("UNITED") || fullText.includes("UHC")) planType = "UnitedHealthcare";
+      else if (fullText.includes("CIGNA")) planType = "Cigna";
+      else if (fullText.includes("HUMANA")) planType = "Humana";
+
+      // Extract member/ID number — look for patterns like XXX-XXX-XXXX, alphanumeric IDs
+      let memberId = "";
+      // Pattern 1: Medicare-style (1ABC2-DE3-FG45)
+      const medicarePattern = /\b(\d[A-Z0-9]{3,}-[A-Z0-9]{2,}-[A-Z0-9]{2,})\b/i;
+      // Pattern 2: General ID with dashes (123-456-7890)
+      const dashPattern = /\b(\d{1,4}[-]\d{2,4}[-]\d{2,5})\b/;
+      // Pattern 3: Long alphanumeric (at least 6 chars with mix of letters and numbers)
+      const alphaNumPattern = /\b([A-Z0-9]{2,}[-]?[A-Z0-9]{2,}[-]?[A-Z0-9]{2,})\b/i;
+      // Pattern 4: Pure number string 6+ digits
+      const pureNumPattern = /\b(\d{6,12})\b/;
+      // Pattern 5: After "ID" or "Member" or "#" keyword
+      const afterKeyword = /(?:ID|MEMBER|MBI|HICN|#|NO|NUMBER)[:\s#]*([A-Z0-9][-A-Z0-9]{4,})/i;
+
+      if (afterKeyword.test(text)) memberId = text.match(afterKeyword)[1];
+      else if (medicarePattern.test(text)) memberId = text.match(medicarePattern)[1];
+      else if (dashPattern.test(text)) memberId = text.match(dashPattern)[1];
+      else if (pureNumPattern.test(text)) memberId = text.match(pureNumPattern)[1];
+      else if (alphaNumPattern.test(text)) memberId = text.match(alphaNumPattern)[1];
+
+      // Extract name — look for "NAME" keyword or two capitalized words
+      let name = "";
+      const nameKeyword = /(?:NAME|BENEFICIARY|MEMBER)[:\s]*([A-Z][A-Za-z]+[\s,]+[A-Z][A-Za-z]+)/i;
+      if (nameKeyword.test(text)) name = text.match(nameKeyword)[1].replace(",", " ").trim();
+
+      // Extract dates
+      let effectiveDate = "";
+      const datePattern = /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/;
+      if (datePattern.test(text)) effectiveDate = text.match(datePattern)[1];
+
+      // Extract group number
+      let groupNum = "";
+      const groupPattern = /(?:GROUP|GRP)[:\s#]*([A-Z0-9]{3,})/i;
+      if (groupPattern.test(text)) groupNum = text.match(groupPattern)[1];
+
+      return {
+        planType,
+        memberId: memberId || "Not detected",
+        name: name || "Not detected",
+        effectiveDate: effectiveDate || "Not detected",
+        groupNum: groupNum || "",
+        rawText: text,
+      };
+    }
+
+    /* ═══════════════════════════════════════════════
+       MAIN APP
+       ═══════════════════════════════════════════════ */
+    function App() {
+      const [step, setStep] = useState("landing");
+      const [phone, setPhone] = useState("");
+      const [code, setCode] = useState("");
+      const method = "text";
+      const [error, setError] = useState("");
+      const [loading, setLoading] = useState(false);
+      const [countdown, setCountdown] = useState(0);
+      const [devCode, setDevCode] = useState("");
+      const [userData, setUserData] = useState(null);
+      // Scanner state
+      const [scanState, setScanState] = useState("camera"); // camera | processing | done | error
+      const [scanData, setScanData] = useState(null);
+      const [ocrProgress, setOcrProgress] = useState(0);
+      const [cameraReady, setCameraReady] = useState(false);
+      const [cameraError, setCameraError] = useState("");
+      const [scanCountdown, setScanCountdown] = useState(0);
+      const [beneficiary, setBeneficiary] = useState(null);
+      const [dashTab, setDashTab] = useState("eligibility");
+      const videoRef = useRef(null);
+      const canvasRef = useRef(null);
+      const streamRef = useRef(null);
+      const countdownRef = useRef(null);
+      const autoScanTriggered = useRef(false);
+
+      useEffect(()=>{if(countdown>0){const t=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(t);}},[countdown]);
+
+      // Start camera when entering scanner step
+      useEffect(() => {
+        if (step === "scanner") {
+          autoScanTriggered.current = false;
+          startCamera();
+        } else {
+          stopCamera();
+        }
+        return () => {
+          stopCamera();
+          if (countdownRef.current) clearInterval(countdownRef.current);
+        };
+      }, [step]);
+
+      // Auto-scan countdown: starts when camera is ready
+      useEffect(() => {
+        if (cameraReady && scanState === "camera" && !autoScanTriggered.current) {
+          autoScanTriggered.current = true;
+          setScanCountdown(3);
+          let count = 3;
+          countdownRef.current = setInterval(() => {
+            count -= 1;
+            setScanCountdown(count);
+            if (count <= 0) {
+              clearInterval(countdownRef.current);
+              countdownRef.current = null;
+              captureAndScan();
+            }
+          }, 1000);
+        }
+        return () => {
+          if (countdownRef.current) {
+            clearInterval(countdownRef.current);
+            countdownRef.current = null;
+          }
+        };
+      }, [cameraReady, scanState]);
+
+      const startCamera = async () => {
+        setCameraReady(false);
+        setCameraError("");
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+          });
+          streamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            videoRef.current.onloadedmetadata = () => {
+              videoRef.current.play();
+              setCameraReady(true);
+            };
+          }
+        } catch (err) {
+          console.error("Camera error:", err);
+          setCameraError(
+            err.name === "NotAllowedError"
+              ? "Camera access was denied. Please allow camera access and try again."
+              : err.name === "NotFoundError"
+              ? "No camera found on this device."
+              : "Could not access camera: " + err.message
+          );
+        }
+      };
+
+      const stopCamera = () => {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(t => t.stop());
+          streamRef.current = null;
+        }
+        setCameraReady(false);
+      };
+
+      const captureAndScan = async () => {
+        if (!videoRef.current || !canvasRef.current) return;
+
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0);
+
+        stopCamera();
+        setScanState("processing");
+        setOcrProgress(0);
+
+        try {
+          const result = await Tesseract.recognize(
+            canvas,
+            "eng",
+            {
+              logger: (m) => {
+                if (m.status === "recognizing text") {
+                  setOcrProgress(Math.round(m.progress * 100));
+                }
+              }
+            }
+          );
+
+          const extracted = extractCardData(result.data.text);
+          setScanData(extracted);
+          setScanState("done");
+        } catch (err) {
+          console.error("OCR error:", err);
+          setScanState("error");
+          setCameraError("Failed to read card. Please try again.");
+        }
+      };
+
+      const resetScanner = () => {
+        setScanState("camera");
+        setScanData(null);
+        setOcrProgress(0);
+        setCameraError("");
+        setScanCountdown(0);
+        autoScanTriggered.current = false;
+        startCamera();
+      };
+
+      const saveCardAndShowDashboard = async () => {
+        if (!scanData) return;
+        setLoading(true);
+        try {
+          const res = await fetch(API + "/save-card", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              phone,
+              memberId: scanData.memberId,
+              planType: scanData.planType,
+              name: scanData.name,
+              effectiveDate: scanData.effectiveDate,
+              groupNum: scanData.groupNum,
+              rawText: scanData.rawText,
+            }),
+          });
+          const result = await res.json();
+          if (result.success) {
+            setBeneficiary(result.data);
+            setDashTab("eligibility");
+            setStep("dashboard");
+          }
+        } catch (e) {
+          console.error("Save card error:", e);
+        }
+        setLoading(false);
+      };
+
+      const sendCode = async()=>{
+        if(phone.length!==10){setError("Enter a full 10-digit phone number.");return;}
+        setError("");setLoading(true);
+        try{
+          const res=await fetch(API+"/send-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone,method})});
+          const data=await res.json();
+          if(!res.ok){setError(data.error);setLoading(false);return;}
+          if(data._dev_code)setDevCode(data._dev_code);
+          setStep("code");setCountdown(60);
+        }catch(e){setError("Can't reach server. Is it running?");}
+        setLoading(false);
+      };
+
+      const verifyCode = async(val)=>{
+        const c=val||code;
+        if(c.length!==4){setError("Enter all 4 digits.");return;}
+        setError("");setLoading(true);
+        try{
+          const res=await fetch(API+"/verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone,code:c})});
+          const data=await res.json();
+          if(!res.ok){setError(data.error);setCode("");setLoading(false);return;}
+          setUserData(data.user);setStep("success");
+        }catch(e){setError("Can't reach server.");}
+        setLoading(false);
+      };
+
+      const maskedPhone = phone.length===10?`(${phone.slice(0,3)}) •••-${phone.slice(6)}`:"";
+      const errorBox = error ? <div style={{background:"#fef2f2",border:"1px solid #fecaca",color:"#dc2626",padding:"12px 18px",borderRadius:"12px",fontSize:"15px",fontWeight:600,marginBottom:"16px"}}>{error}</div> : null;
+
+      /* ══════════ LANDING ══════════ */
+      if (step === "landing") {
+        return (
+          <div style={{minHeight:"100vh",position:"relative"}}>
+            <AnimatedBG/>
+            <div style={{position:"relative",zIndex:1}}>
+              <nav className="fade-in" style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 40px",maxWidth:"1200px",margin:"0 auto"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+                  <div style={{width:"42px",height:"42px",borderRadius:"12px",background:"linear-gradient(135deg,#dc2626,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                  </div>
+                  <span style={{fontSize:"20px",fontWeight:800,color:"#1e293b",letterSpacing:"-0.3px"}}>Health Helper</span>
+                </div>
+                <button onClick={()=>setStep("phone")} style={{padding:"10px 24px",fontSize:"15px",fontWeight:600,background:"#fff",border:"1px solid #e2e8f0",borderRadius:"12px",color:"#2563eb",cursor:"pointer",transition:"all 0.2s",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>Sign In</button>
+              </nav>
+
+              <div style={{textAlign:"center",padding:"72px 24px 48px",maxWidth:"740px",margin:"0 auto"}}>
+                <div className="fade-up" style={{display:"inline-flex",alignItems:"center",gap:"8px",padding:"8px 20px",borderRadius:"100px",background:"#eff6ff",border:"1px solid #bfdbfe",fontSize:"14px",fontWeight:600,color:"#2563eb",marginBottom:"28px"}}>
+                  <span style={{width:"8px",height:"8px",borderRadius:"50%",background:"#2563eb",display:"inline-block",animation:"float 2s ease-in-out infinite"}}/>
+                  No passwords. No complicated forms.
+                </div>
+                <h1 className="fade-up-d1" style={{fontSize:"clamp(40px,6vw,68px)",fontWeight:900,lineHeight:1.08,letterSpacing:"-2px",marginBottom:"24px",color:"#0f172a"}}>
+                  Your health benefits,<br/><span style={{background:"linear-gradient(135deg,#dc2626,#2563eb)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>finally simple.</span>
+                </h1>
+                <p className="fade-up-d2" style={{fontSize:"20px",color:"#64748b",lineHeight:1.7,maxWidth:"520px",margin:"0 auto 44px"}}>
+                  Scan your insurance card, find in-network care, and book free rides to your appointments.
+                </p>
+                <div className="fade-up-d3" style={{display:"flex",gap:"12px",justifyContent:"center",flexWrap:"wrap"}}>
+                  <PrimaryButton onClick={()=>setStep("phone")} style={{maxWidth:"280px",fontSize:"20px",padding:"20px 36px"}} variant="red">Get Started Free</PrimaryButton>
+                  <button onClick={()=>setStep("phone")} style={{padding:"20px 36px",fontSize:"20px",fontWeight:700,background:"#fff",border:"2px solid #2563eb",borderRadius:"16px",color:"#2563eb",cursor:"pointer",transition:"all 0.3s ease",maxWidth:"280px"}}
+                    onMouseEnter={e=>{e.target.style.background="#eff6ff";}} onMouseLeave={e=>{e.target.style.background="#fff";}}>Sign In</button>
+                </div>
+                <p className="fade-up-d4" style={{fontSize:"14px",color:"#94a3b8",marginTop:"18px"}}>Takes 30 seconds — just your phone number</p>
+              </div>
+
+              <div style={{display:"flex",gap:"16px",justifyContent:"center",flexWrap:"wrap",padding:"0 24px 64px",maxWidth:"800px",margin:"0 auto"}}>
+                <FeatureCard icon="📄" title="Scan Card" desc="Camera reads your insurance card instantly" color="linear-gradient(135deg,#dc2626,#ef4444)" delay={1}/>
+                <FeatureCard icon="🏥" title="Find Care" desc="Locate in-network doctors near you" color="linear-gradient(135deg,#2563eb,#3b82f6)" delay={2}/>
+                <FeatureCard icon="🚗" title="Free Rides" desc="Book transport to your appointments" color="linear-gradient(135deg,#2563eb,#60a5fa)" delay={3}/>
+              </div>
+
+              <div className="fade-up-d4" style={{display:"flex",gap:"48px",justifyContent:"center",flexWrap:"wrap",padding:"40px 24px",maxWidth:"700px",margin:"0 auto",borderTop:"1px solid #e2e8f0"}}>
+                {[{num:"100%",label:"Free to Use"},{num:"30s",label:"Quick Setup"},{num:"24/7",label:"AI Available"}].map((s,i)=>(
+                  <div key={i} style={{textAlign:"center"}}><div style={{fontSize:"32px",fontWeight:900,color:"#2563eb"}}>{s.num}</div><div style={{fontSize:"14px",color:"#94a3b8",fontWeight:500,marginTop:"4px"}}>{s.label}</div></div>
+                ))}
+              </div>
+
+              <div style={{textAlign:"center",padding:"24px 24px 48px"}}>
+                <div style={{display:"flex",gap:"24px",justifyContent:"center",flexWrap:"wrap"}}>
+                  {["HIPAA Compliant","256-bit Encrypted","Medicare & Medicaid"].map((t,i)=>(
+                    <span key={i} style={{display:"inline-flex",alignItems:"center",gap:"6px",fontSize:"13px",color:"#94a3b8",fontWeight:500}}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>{t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      /* ══════════ PHONE ENTRY ══════════ */
+      if (step === "phone") {
+        return (
+          <div style={{minHeight:"100vh",position:"relative",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px"}}>
+            <AnimatedBG/>
+            <Card className="fade-up" style={{position:"relative",zIndex:1,padding:"48px 40px",maxWidth:"460px",width:"100%",textAlign:"center"}}>
+              <button onClick={()=>setStep("landing")} style={{position:"absolute",top:"20px",left:"20px",background:"none",border:"none",color:"#94a3b8",fontSize:"14px",cursor:"pointer",display:"flex",alignItems:"center",gap:"4px"}}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5m7-7l-7 7 7 7"/></svg>Back
+              </button>
+              <div style={{width:"72px",height:"72px",borderRadius:"20px",margin:"0 auto 24px",background:"linear-gradient(135deg,#2563eb,#3b82f6)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 8px 24px rgba(37,99,235,0.25)"}}>
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+              </div>
+              <h2 style={{fontSize:"28px",fontWeight:800,color:"#0f172a",marginBottom:"6px",letterSpacing:"-0.5px"}}>Welcome</h2>
+              <p style={{fontSize:"17px",color:"#94a3b8",marginBottom:"32px",lineHeight:1.5}}>Enter your phone number to get started.</p>
+              <div style={{marginBottom:"32px",textAlign:"left"}}>
+                <label style={{display:"block",fontSize:"15px",fontWeight:600,color:"#475569",marginBottom:"10px"}}>Phone Number</label>
+                <PhoneInput value={phone} onChange={v=>{setPhone(v);setError("");}}/>
+              </div>
+              {errorBox}
+              <PrimaryButton onClick={sendCode} disabled={loading||phone.length<10} variant="blue">
+                {loading?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}}><Spinner/>Sending...</span>:"Send My Code"}
+              </PrimaryButton>
+              <p style={{fontSize:"13px",color:"#cbd5e1",marginTop:"18px",lineHeight:1.5}}>We'll text you a 4-digit code. Standard rates may apply.</p>
+            </Card>
+          </div>
+        );
+      }
+
+      /* ══════════ CODE VERIFY ══════════ */
+      if (step === "code") {
+        return (
+          <div style={{minHeight:"100vh",position:"relative",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px"}}>
+            <AnimatedBG/>
+            <Card className="scale-in" style={{position:"relative",zIndex:1,padding:"48px 40px",maxWidth:"460px",width:"100%",textAlign:"center"}}>
+              <div style={{width:"72px",height:"72px",borderRadius:"20px",margin:"0 auto 24px",background:"linear-gradient(135deg,#dc2626,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 8px 24px rgba(220,38,38,0.25)"}}>
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+              </div>
+              <h2 style={{fontSize:"28px",fontWeight:800,color:"#0f172a",marginBottom:"6px",letterSpacing:"-0.5px"}}>Enter Your Code</h2>
+              <p style={{fontSize:"17px",color:"#94a3b8",marginBottom:"8px"}}>We texted <span style={{color:"#1e293b",fontWeight:700}}>{maskedPhone}</span></p>
+              {devCode&&<div style={{display:"inline-block",padding:"8px 18px",borderRadius:"10px",background:"#eff6ff",border:"1px solid #bfdbfe",fontSize:"15px",fontWeight:600,color:"#2563eb",marginBottom:"16px"}}>Dev mode — your code: <strong>{devCode}</strong></div>}
+              <p style={{fontSize:"16px",color:"#94a3b8",marginBottom:"28px"}}>Type the 4 digits</p>
+              <div style={{marginBottom:"28px"}}><CodeInput value={code} onChange={v=>{setCode(v);setError("");}} onComplete={verifyCode}/></div>
+              {errorBox}
+              <PrimaryButton onClick={()=>verifyCode()} disabled={loading||code.length<4} variant="blue">
+                {loading?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}}><Spinner/>Checking...</span>:"Verify & Continue"}
+              </PrimaryButton>
+              <div style={{marginTop:"22px"}}>
+                {countdown>0?<p style={{fontSize:"15px",color:"#94a3b8"}}>Resend in <strong style={{color:"#2563eb"}}>{countdown}s</strong></p>
+                :<button onClick={()=>{setCode("");setDevCode("");setError("");sendCode();}} style={{background:"none",border:"none",color:"#2563eb",fontSize:"16px",fontWeight:700,cursor:"pointer",textDecoration:"underline"}}>Didn't get it? Resend</button>}
+              </div>
+              <button onClick={()=>{setStep("phone");setCode("");setError("");setDevCode("");}} style={{background:"none",border:"none",color:"#94a3b8",fontSize:"15px",cursor:"pointer",marginTop:"12px",textDecoration:"underline"}}>← Different number</button>
+            </Card>
+          </div>
+        );
+      }
+
+      /* ══════════ SUCCESS ══════════ */
+      if (step === "success") {
+        return (
+          <div style={{minHeight:"100vh",position:"relative",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px"}}>
+            <AnimatedBG/>
+            <Card className="scale-in" style={{position:"relative",zIndex:1,padding:"48px 40px",maxWidth:"460px",width:"100%",textAlign:"center"}}>
+              <div style={{width:"88px",height:"88px",borderRadius:"50%",margin:"0 auto 28px",background:"linear-gradient(135deg,#2563eb,#3b82f6)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 0 60px rgba(37,99,235,0.2)"}}>
+                <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" style={{strokeDasharray:24,animation:"checkDraw 0.6s ease-out 0.3s both"}}/></svg>
+              </div>
+              <h2 style={{fontSize:"32px",fontWeight:900,marginBottom:"8px",background:"linear-gradient(135deg,#2563eb,#3b82f6)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>You're In!</h2>
+              <p style={{fontSize:"18px",color:"#94a3b8",marginBottom:"32px"}}>Account created successfully.</p>
+              {userData&&(
+                <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:"16px",padding:"20px 24px",marginBottom:"28px",textAlign:"left"}}>
+                  <p style={{fontSize:"15px",color:"#64748b",marginBottom:"8px"}}><span style={{color:"#94a3b8"}}>ID:</span> <strong style={{color:"#2563eb"}}>#{userData.id}</strong></p>
+                  <p style={{fontSize:"15px",color:"#64748b",marginBottom:"8px"}}><span style={{color:"#94a3b8"}}>Phone:</span> <strong style={{color:"#1e293b"}}>({phone.slice(0,3)}) {phone.slice(3,6)}-{phone.slice(6)}</strong></p>
+                  <p style={{fontSize:"15px",color:"#64748b"}}><span style={{color:"#94a3b8"}}>Status:</span> <strong style={{color:"#2563eb"}}>Verified ✓</strong></p>
+                </div>
+              )}
+              <PrimaryButton variant="red" onClick={()=>{resetScanner();setStep("scanner");}}>
+                <span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"10px"}}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                  Scan My Insurance Card
+                </span>
+              </PrimaryButton>
+              <button onClick={()=>alert("Skipping to dashboard...")} style={{background:"none",border:"none",color:"#94a3b8",fontSize:"15px",cursor:"pointer",marginTop:"16px",textDecoration:"underline"}}>Skip for now</button>
+            </Card>
+          </div>
+        );
+      }
+
+      /* ══════════ CARD SCANNER (live camera + OCR) ══════════ */
+      if (step === "scanner") {
+        return (
+          <div style={{minHeight:"100vh",position:"relative",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px"}}>
+            <AnimatedBG/>
+            {/* Hidden canvas for capture */}
+            <canvas ref={canvasRef} style={{display:"none"}}/>
+
+            <Card className="scale-in" style={{position:"relative",zIndex:1,padding:"40px 32px",maxWidth:"540px",width:"100%",textAlign:"center"}}>
+              <button onClick={()=>{stopCamera();setStep("success");}} style={{position:"absolute",top:"20px",left:"20px",background:"none",border:"none",color:"#94a3b8",fontSize:"14px",cursor:"pointer",display:"flex",alignItems:"center",gap:"4px"}}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5m7-7l-7 7 7 7"/></svg>Back
+              </button>
+
+              <div style={{width:"64px",height:"64px",borderRadius:"18px",margin:"0 auto 20px",background:"linear-gradient(135deg,#dc2626,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 8px 24px rgba(220,38,38,0.25)"}}>
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              </div>
+
+              <h2 style={{fontSize:"24px",fontWeight:800,color:"#0f172a",marginBottom:"6px"}}>
+                {scanState==="camera"&&"Scan Your Card"}
+                {scanState==="processing"&&"Reading Your Card..."}
+                {scanState==="done"&&"Card Scanned!"}
+                {scanState==="error"&&"Scan Failed"}
+              </h2>
+              <p style={{fontSize:"15px",color:"#94a3b8",marginBottom:"24px",lineHeight:1.5}}>
+                {scanState==="camera"&&(cameraReady?"Hold your card steady — we'll scan it automatically.":"Connecting to camera...")}
+                {scanState==="processing"&&"Reading your card number — hold on a moment."}
+                {scanState==="done"&&"Here's what we found on your card."}
+                {scanState==="error"&&(cameraError||"Something went wrong.")}
+              </p>
+
+              {/* ── CAMERA VIEW ── */}
+              {scanState==="camera"&&(
+                <>
+                  <div style={{position:"relative",borderRadius:"16px",overflow:"hidden",marginBottom:"24px",background:"#0f172a",minHeight:"240px"}}>
+                    <video ref={videoRef} autoPlay playsInline muted
+                      style={{width:"100%",display:"block",borderRadius:"16px",transform:"scaleX(1)"}}/>
+
+                    {cameraReady&&(
+                      <>
+                        {/* Corner brackets overlay */}
+                        <div style={{position:"absolute",inset:"12%",border:"2px solid rgba(255,255,255,0.6)",borderRadius:"12px",pointerEvents:"none"}}/>
+                        {/* Scanning line */}
+                        <div style={{position:"absolute",left:"12%",right:"12%",height:"2px",background:"linear-gradient(90deg,transparent,#dc2626,transparent)",animation:"scanline 2s ease-in-out infinite",pointerEvents:"none"}}/>
+
+                        {/* Countdown overlay */}
+                        {scanCountdown > 0 && (
+                          <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
+                            <div style={{width:"80px",height:"80px",borderRadius:"50%",background:"rgba(220,38,38,0.85)",display:"flex",alignItems:"center",justifyContent:"center",animation:"scaleIn 0.3s ease-out",boxShadow:"0 0 40px rgba(220,38,38,0.4)"}}>
+                              <span style={{fontSize:"40px",fontWeight:900,color:"#fff"}}>{scanCountdown}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Label */}
+                        <div style={{position:"absolute",bottom:"12px",left:"50%",transform:"translateX(-50%)",background:"rgba(0,0,0,0.6)",borderRadius:"8px",padding:"6px 14px",fontSize:"13px",color:"#fff",fontWeight:500,whiteSpace:"nowrap"}}>
+                          {scanCountdown > 0 ? "Hold steady — scanning in " + scanCountdown + "s" : "Scanning your card..."}
+                        </div>
+                      </>
+                    )}
+
+                    {!cameraReady&&!cameraError&&(
+                      <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                        <Spinner size={32}/>
+                      </div>
+                    )}
+
+                    {cameraError&&(
+                      <div style={{padding:"60px 24px",textAlign:"center"}}>
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{margin:"0 auto 12px",display:"block"}}><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                        <p style={{color:"#f87171",fontSize:"15px",fontWeight:500}}>{cameraError}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {cameraReady&&scanCountdown<=0&&(
+                    <button onClick={captureAndScan} style={{background:"none",border:"none",color:"#2563eb",fontSize:"15px",fontWeight:600,cursor:"pointer",textDecoration:"underline"}}>
+                      Scan now
+                    </button>
+                  )}
+
+                  {cameraError&&(
+                    <PrimaryButton variant="blue" onClick={()=>{setCameraError("");autoScanTriggered.current=false;startCamera();}}>Try Again</PrimaryButton>
+                  )}
+                </>
+              )}
+
+              {/* ── PROCESSING ── */}
+              {scanState==="processing"&&(
+                <div style={{padding:"20px 0"}}>
+                  <div style={{width:"80px",height:"80px",margin:"0 auto 24px",borderRadius:"50%",background:"#eff6ff",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    <span style={{width:"40px",height:"40px",border:"4px solid #bfdbfe",borderTopColor:"#2563eb",borderRadius:"50%",display:"block",animation:"spin 0.8s linear infinite"}}/>
+                  </div>
+                  {/* Progress bar */}
+                  <div style={{background:"#e2e8f0",borderRadius:"100px",height:"8px",overflow:"hidden",marginBottom:"12px"}}>
+                    <div style={{background:"linear-gradient(90deg,#2563eb,#3b82f6)",height:"100%",borderRadius:"100px",width:ocrProgress+"%",transition:"width 0.3s ease"}}/>
+                  </div>
+                  <p style={{fontSize:"14px",color:"#64748b",fontWeight:500}}>Analyzing text... {ocrProgress}%</p>
+                </div>
+              )}
+
+              {/* ── RESULTS ── */}
+              {scanState==="done"&&scanData&&(
+                <>
+                  {/* Card visual */}
+                  <div className="fade-up" style={{background:"linear-gradient(135deg,#1e3a5f,#2563eb)",borderRadius:"16px",padding:"24px",marginBottom:"20px",color:"#fff",textAlign:"left"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"18px"}}>
+                      <span style={{fontSize:"12px",fontWeight:700,textTransform:"uppercase",letterSpacing:"1.5px",opacity:0.8}}>{scanData.planType}</span>
+                      <div style={{display:"flex",gap:"4px"}}><div style={{width:"12px",height:"12px",borderRadius:"50%",background:"#dc2626"}}/><div style={{width:"12px",height:"12px",borderRadius:"50%",background:"#fff"}}/><div style={{width:"12px",height:"12px",borderRadius:"50%",background:"#2563eb"}}/></div>
+                    </div>
+                    {scanData.name!=="Not detected"&&<><p style={{fontSize:"12px",opacity:0.6,marginBottom:"2px"}}>Name</p><p style={{fontSize:"18px",fontWeight:700,marginBottom:"14px"}}>{scanData.name}</p></>}
+                    <p style={{fontSize:"12px",opacity:0.6,marginBottom:"2px"}}>Member / Card ID</p>
+                    <p style={{fontSize:"20px",fontWeight:800,letterSpacing:"1.5px",fontFamily:"monospace"}}>{scanData.memberId}</p>
+                  </div>
+
+                  {/* Details */}
+                  <div className="fade-up" style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:"14px",padding:"18px 20px",marginBottom:"24px",textAlign:"left"}}>
+                    {[
+                      {label:"Plan Type",value:scanData.planType,color:"#2563eb"},
+                      scanData.effectiveDate!=="Not detected"&&{label:"Effective Date",value:scanData.effectiveDate,color:"#1e293b"},
+                      scanData.groupNum&&{label:"Group #",value:scanData.groupNum,color:"#1e293b"},
+                    ].filter(Boolean).map((item,i)=>(
+                      <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:i<2?"1px solid #f1f5f9":"none"}}>
+                        <span style={{fontSize:"14px",color:"#94a3b8"}}>{item.label}</span>
+                        <span style={{fontSize:"15px",fontWeight:600,color:item.color}}>{item.value}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {scanData.memberId!=="Not detected"?(
+                    <div className="fade-up" style={{display:"flex",alignItems:"center",gap:"8px",padding:"10px 14px",borderRadius:"10px",background:"#f0fdf4",border:"1px solid #bbf7d0",marginBottom:"24px",justifyContent:"center"}}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      <span style={{fontSize:"14px",fontWeight:600,color:"#16a34a"}}>Card number detected</span>
+                    </div>
+                  ):(
+                    <div className="fade-up" style={{display:"flex",alignItems:"center",gap:"8px",padding:"10px 14px",borderRadius:"10px",background:"#fef3c7",border:"1px solid #fde68a",marginBottom:"24px",justifyContent:"center"}}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2.5"><path d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                      <span style={{fontSize:"14px",fontWeight:600,color:"#d97706"}}>Could not detect ID — try rescanning</span>
+                    </div>
+                  )}
+
+                  <div className="fade-up" style={{display:"flex",gap:"10px"}}>
+                    <PrimaryButton variant="blue" onClick={saveCardAndShowDashboard} disabled={loading} style={{fontSize:"17px",padding:"16px"}}>
+                      {loading ? <span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}}><Spinner/>Saving...</span> : "Looks Good"}
+                    </PrimaryButton>
+                    <button onClick={()=>{resetScanner();}} style={{padding:"16px 20px",fontSize:"17px",fontWeight:600,background:"#fff",border:"2px solid #e2e8f0",borderRadius:"16px",color:"#64748b",cursor:"pointer",transition:"all 0.2s",whiteSpace:"nowrap"}}>Rescan</button>
+                  </div>
+                </>
+              )}
+
+              {/* ── ERROR STATE ── */}
+              {scanState==="error"&&(
+                <div style={{padding:"20px 0"}}>
+                  <PrimaryButton variant="red" onClick={resetScanner}>Try Again</PrimaryButton>
+                </div>
+              )}
+            </Card>
+          </div>
+        );
+      }
+
+      /* ══════════ DASHBOARD — Beneficiary Record ══════════ */
+      if (step === "dashboard" && beneficiary) {
+        const d = beneficiary;
+        const has = (v) => v && v !== "—";
+        const tabStyle = (id) => ({
+          padding:"10px 18px",fontSize:"14px",fontWeight:600,
+          background:dashTab===id?"#2563eb":"transparent",
+          color:dashTab===id?"#fff":"#64748b",
+          border:"none",borderRadius:"10px",cursor:"pointer",
+          transition:"all 0.2s",whiteSpace:"nowrap",
+        });
+        const sectionCard = (children, delay="") => (
+          <div className={`fade-up${delay?" fade-up-d"+delay:""}`} style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:"16px",padding:"24px",marginBottom:"16px"}}>
+            {children}
+          </div>
+        );
+        const row = (label, value, color="#1e293b") => (
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #f1f5f9"}}>
+            <span style={{fontSize:"14px",color:"#94a3b8",fontWeight:500}}>{label}</span>
+            <span style={{fontSize:"15px",fontWeight:600,color: !has(value) ? "#cbd5e1" : color, textAlign:"right",maxWidth:"60%",fontStyle: !has(value) ? "italic" : "normal"}}>{value}</span>
+          </div>
+        );
+        const badge = (text, color, bg) => (
+          <span style={{display:"inline-flex",alignItems:"center",gap:"5px",padding:"4px 12px",borderRadius:"100px",fontSize:"13px",fontWeight:600,color,background:bg}}>{text}</span>
+        );
+        const statusBadge = has(d.eligibility.status)
+          ? badge("Active", "#16a34a", "#f0fdf4")
+          : badge("Unknown", "#94a3b8", "#f1f5f9");
+
+        return (
+          <div style={{minHeight:"100vh",position:"relative",background:"#f8fafc"}}>
+            <AnimatedBG/>
+            <div style={{position:"relative",zIndex:1,maxWidth:"720px",margin:"0 auto",padding:"24px 16px 64px"}}>
+
+              {/* Header */}
+              <div className="fade-up" style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                  <div style={{width:"44px",height:"44px",borderRadius:"12px",background:"linear-gradient(135deg,#dc2626,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                  </div>
+                  <div>
+                    <div style={{fontSize:"18px",fontWeight:800,color:"#0f172a"}}>Health Helper</div>
+                    <div style={{fontSize:"13px",color:"#94a3b8"}}>Beneficiary Record</div>
+                  </div>
+                </div>
+                <button onClick={()=>{setStep("success");setBeneficiary(null);}} style={{padding:"8px 16px",fontSize:"13px",fontWeight:600,background:"#fff",border:"1px solid #e2e8f0",borderRadius:"10px",color:"#64748b",cursor:"pointer"}}>Sign Out</button>
+              </div>
+
+              {/* Card Banner — built from scanned data */}
+              <div className="fade-up" style={{background:"linear-gradient(135deg,#1e3a5f,#2563eb)",borderRadius:"20px",padding:"28px",marginBottom:"24px",color:"#fff"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"16px"}}>
+                  <div>
+                    <p style={{fontSize:"12px",opacity:0.6,textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>Card / Member ID</p>
+                    <p style={{fontSize:"28px",fontWeight:900,letterSpacing:"2px",fontFamily:"monospace"}}>{d.personal.mbi}</p>
+                  </div>
+                  <div style={{display:"flex",gap:"4px"}}><div style={{width:"12px",height:"12px",borderRadius:"50%",background:"#dc2626"}}/><div style={{width:"12px",height:"12px",borderRadius:"50%",background:"#fff"}}/><div style={{width:"12px",height:"12px",borderRadius:"50%",background:"#60a5fa"}}/></div>
+                </div>
+                <div style={{display:"flex",gap:"24px",flexWrap:"wrap"}}>
+                  {has(d.personal.fullName)&&<div><p style={{fontSize:"11px",opacity:0.5,marginBottom:"2px"}}>Name</p><p style={{fontSize:"16px",fontWeight:700}}>{d.personal.fullName}</p></div>}
+                  {has(d.personal.dateOfBirth)&&<div><p style={{fontSize:"11px",opacity:0.5,marginBottom:"2px"}}>DOB</p><p style={{fontSize:"16px",fontWeight:700}}>{d.personal.dateOfBirth}</p></div>}
+                  {has(d.plan.name)&&<div><p style={{fontSize:"11px",opacity:0.5,marginBottom:"2px"}}>Plan</p><p style={{fontSize:"16px",fontWeight:700}}>{d.plan.name}</p></div>}
+                  <div><p style={{fontSize:"11px",opacity:0.5,marginBottom:"2px"}}>Status</p>{statusBadge}</div>
+                </div>
+              </div>
+
+              {/* Tab Navigation */}
+              <div className="fade-up-d1" style={{display:"flex",gap:"6px",overflowX:"auto",marginBottom:"20px",background:"rgba(255,255,255,0.8)",backdropFilter:"blur(12px)",borderRadius:"14px",padding:"6px",border:"1px solid #e2e8f0"}}>
+                {[
+                  {id:"eligibility",label:"Eligibility"},
+                  {id:"plan",label:"Plan"},
+                  {id:"claims",label:"Claims"},
+                  {id:"personal",label:"Personal Info"},
+                  {id:"ssa",label:"SSA Record"},
+                ].map(t=>(
+                  <button key={t.id} onClick={()=>setDashTab(t.id)} style={tabStyle(t.id)}>{t.label}</button>
+                ))}
+              </div>
+
+              {/* ── TAB: ELIGIBILITY ── */}
+              {dashTab==="eligibility"&&(
+                <div>
+                  {sectionCard(<>
+                    <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a",marginBottom:"4px"}}>Eligibility Details</h3>
+                    <p style={{fontSize:"13px",color:"#94a3b8",marginBottom:"16px"}}>Coverage status and enrollment read from your card</p>
+                    {row("Overall Status", statusBadge)}
+                    {row("Part A (Hospital)", d.eligibility.partA.enrolled ? "Enrolled — since " + d.eligibility.partA.effectiveDate : "Not found on card", d.eligibility.partA.enrolled ? "#2563eb" : "#cbd5e1")}
+                    {has(d.eligibility.partA.premium) && row("Part A Premium", d.eligibility.partA.premium)}
+                    {row("Part B (Medical)", d.eligibility.partB.enrolled ? "Enrolled — since " + d.eligibility.partB.effectiveDate : "Not found on card", d.eligibility.partB.enrolled ? "#2563eb" : "#cbd5e1")}
+                    {has(d.eligibility.partB.premium) && row("Part B Premium", d.eligibility.partB.premium)}
+                    {row("Part D (Prescription)", d.eligibility.partD.enrolled ? "Enrolled — since " + d.eligibility.partD.effectiveDate : "Not found on card", d.eligibility.partD.enrolled ? "#2563eb" : "#cbd5e1")}
+                    {has(d.eligibility.partD.premium) && row("Part D Premium", d.eligibility.partD.premium)}
+                    {d.eligibility.esrd && row("ESRD (End-Stage Renal)", "Yes", "#dc2626")}
+                    {d.eligibility.hospice && row("Hospice Benefit", "Yes", "#dc2626")}
+                    {has(d.eligibility.dualEligible) && row("Dual Eligible (Medicaid)", d.eligibility.dualEligible, "#7c3aed")}
+                  </>)}
+                </div>
+              )}
+
+              {/* ── TAB: PLAN ENROLLMENT ── */}
+              {dashTab==="plan"&&(
+                <div>
+                  {sectionCard(<>
+                    <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a",marginBottom:"4px"}}>Plan Enrollment</h3>
+                    <p style={{fontSize:"13px",color:"#94a3b8",marginBottom:"16px"}}>Health plan details read from your card</p>
+                    {row("Plan Name", d.plan.name, has(d.plan.name) ? "#2563eb" : "#cbd5e1")}
+                    {row("Carrier", d.plan.carrier)}
+                    {has(d.plan.contractId) && row("Contract ID", d.plan.contractId)}
+                    {has(d.plan.pbpId) && row("PBP ID", d.plan.pbpId)}
+                    {row("Member ID", d.plan.memberId, "#0f172a")}
+                    {row("Group Number", d.plan.groupNumber)}
+                    {row("Effective Date", d.plan.effectiveDate)}
+                    {has(d.plan.lisSubsidy) && row("LIS / Extra Help", d.plan.lisSubsidy, "#7c3aed")}
+                  </>)}
+
+                  {sectionCard(<>
+                    <h3 style={{fontSize:"16px",fontWeight:700,color:"#0f172a",marginBottom:"16px"}}>Copay Summary</h3>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:"10px"}}>
+                      {Object.entries(d.plan.copaySummary).map(([k,v])=>(
+                        <div key={k} style={{background:"#f8fafc",borderRadius:"12px",padding:"14px",textAlign:"center",border:"1px solid #f1f5f9"}}>
+                          <div style={{fontSize:"22px",fontWeight:800,color:v==="$0"?"#16a34a": has(v) ? "#2563eb" : "#cbd5e1"}}>{v}</div>
+                          <div style={{fontSize:"12px",color:"#94a3b8",fontWeight:500,marginTop:"4px",textTransform:"capitalize"}}>{k.replace(/([A-Z])/g," $1").trim()}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </>,"1")}
+                </div>
+              )}
+
+              {/* ── TAB: CLAIMS & PAYMENTS ── */}
+              {dashTab==="claims"&&(
+                <div>
+                  {sectionCard(<>
+                    <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a",marginBottom:"4px"}}>Claims & Payments</h3>
+                    <p style={{fontSize:"13px",color:"#94a3b8"}}>Claims and benefit info extracted from your card</p>
+                  </>)}
+
+                  {d.claims && d.claims.length > 0 ? d.claims.map((c,i)=>(
+                    <div key={i} className={`fade-up-d${Math.min(i+1,4)}`} style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:"14px",padding:"18px 20px",marginBottom:"10px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"10px"}}>
+                        <div>
+                          <div style={{fontSize:"15px",fontWeight:700,color:"#0f172a"}}>{c.provider}</div>
+                          <div style={{fontSize:"13px",color:"#64748b",marginTop:"2px"}}>{c.type}</div>
+                        </div>
+                        <div style={{textAlign:"right"}}>
+                          {has(c.date)&&<div style={{fontSize:"13px",color:"#94a3b8"}}>{c.date}</div>}
+                          {has(c.status)&&badge(c.status, "#16a34a", "#f0fdf4")}
+                        </div>
+                      </div>
+                      {(has(c.billed)||has(c.allowed)||has(c.paid)||has(c.youOwe))&&(
+                        <div style={{display:"flex",gap:"16px",flexWrap:"wrap",borderTop:"1px solid #f1f5f9",paddingTop:"10px"}}>
+                          {has(c.billed)&&<div><span style={{fontSize:"11px",color:"#94a3b8",display:"block"}}>Billed</span><span style={{fontSize:"14px",fontWeight:600,color:"#64748b"}}>{c.billed}</span></div>}
+                          {has(c.allowed)&&<div><span style={{fontSize:"11px",color:"#94a3b8",display:"block"}}>Allowed</span><span style={{fontSize:"14px",fontWeight:600}}>{c.allowed}</span></div>}
+                          {has(c.paid)&&<div><span style={{fontSize:"11px",color:"#94a3b8",display:"block"}}>Paid</span><span style={{fontSize:"14px",fontWeight:600,color:"#2563eb"}}>{c.paid}</span></div>}
+                          {has(c.youOwe)&&<div><span style={{fontSize:"11px",color:"#94a3b8",display:"block"}}>You Owe</span><span style={{fontSize:"14px",fontWeight:700,color:"#dc2626"}}>{c.youOwe}</span></div>}
+                        </div>
+                      )}
+                    </div>
+                  )) : (
+                    <div className="fade-up-d1" style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:"14px",padding:"40px 20px",textAlign:"center"}}>
+                      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5" style={{margin:"0 auto 12px",display:"block"}}><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>
+                      <p style={{fontSize:"15px",color:"#94a3b8",fontWeight:500}}>No claims data found on card</p>
+                      <p style={{fontSize:"13px",color:"#cbd5e1",marginTop:"4px"}}>Claims history would appear here once connected to your plan</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── TAB: PERSONAL INFO ── */}
+              {dashTab==="personal"&&(
+                <div>
+                  {sectionCard(<>
+                    <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a",marginBottom:"4px"}}>Personal Information</h3>
+                    <p style={{fontSize:"13px",color:"#94a3b8",marginBottom:"16px"}}>Details extracted from your card</p>
+                    {row("Member / Card ID", d.personal.mbi, "#2563eb")}
+                    {row("Full Name", d.personal.fullName)}
+                    {row("Date of Birth", d.personal.dateOfBirth)}
+                    {has(d.personal.gender) && row("Gender", d.personal.gender)}
+                    {has(d.personal.phone) && row("Phone", d.personal.phone)}
+                    {has(d.personal.address) && row("Address", d.personal.address)}
+                    {has(d.personal.city) && row("City", d.personal.city)}
+                    {has(d.personal.state) && row("State", d.personal.state)}
+                    {has(d.personal.zip) && row("ZIP", d.personal.zip)}
+                  </>)}
+
+                  {/* Any extra key-value fields the OCR picked up */}
+                  {d.rawFields && d.rawFields.length > 0 && sectionCard(<>
+                    <h3 style={{fontSize:"16px",fontWeight:700,color:"#0f172a",marginBottom:"4px"}}>Additional Fields Found</h3>
+                    <p style={{fontSize:"13px",color:"#94a3b8",marginBottom:"16px"}}>Other text recognized on your card</p>
+                    {d.rawFields.map((f,i)=> row(f.label, f.value))}
+                  </>,"1")}
+                </div>
+              )}
+
+              {/* ── TAB: SSA RECORD ── */}
+              {dashTab==="ssa"&&(
+                <div>
+                  {sectionCard(<>
+                    <div style={{display:"flex",alignItems:"center",gap:"10px",marginBottom:"16px"}}>
+                      <div style={{width:"40px",height:"40px",borderRadius:"10px",background:"linear-gradient(135deg,#1e3a5f,#2563eb)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/></svg>
+                      </div>
+                      <div>
+                        <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a"}}>Social Security Record</h3>
+                        <p style={{fontSize:"13px",color:"#94a3b8"}}>Official SSA data on file</p>
+                      </div>
+                    </div>
+                    <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:"12px",padding:"12px 16px",marginBottom:"16px",display:"flex",alignItems:"center",gap:"8px"}}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2"><path d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                      <span style={{fontSize:"13px",color:"#92400e",fontWeight:500}}>This data is derived from what was read on your card.</span>
+                    </div>
+                    {row("Name on Record", d.ssaRecord.nameOnRecord)}
+                    {row("Address on Record", d.ssaRecord.address)}
+                    {row("Date of Birth", d.ssaRecord.dateOfBirth)}
+                    {has(d.ssaRecord.ssn) && row("SSN (masked)", d.ssaRecord.ssn, "#64748b")}
+                    {row("Claim Number", d.ssaRecord.claimNumber, "#2563eb")}
+                  </>)}
+                </div>
+              )}
+
+              {/* Footer */}
+              <div style={{textAlign:"center",marginTop:"24px",paddingBottom:"16px"}}>
+                <div style={{display:"flex",gap:"16px",justifyContent:"center",flexWrap:"wrap"}}>
+                  {["HIPAA Compliant","256-bit Encrypted","CMS Verified"].map((t,i)=>(
+                    <span key={i} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"12px",color:"#94a3b8",fontWeight:500}}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>{t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+          </div>
+        );
+      }
+
+      return null;
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>
