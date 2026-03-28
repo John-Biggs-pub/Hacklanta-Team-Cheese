@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Health Helper</title>
+  <title>Demo Care</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
@@ -120,6 +120,21 @@
     /* ── Spinner ── */
     function Spinner({size=20}){return <span style={{width:size+"px",height:size+"px",border:"3px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin 0.6s linear infinite"}}/>;}
 
+    /* ── Action Card (for dashboard) ── */
+    function ActionCard({icon, title, desc, color, delay, onClick}) {
+      const [hov, setHov] = useState(false);
+      return (
+        <div className={`fade-up-d${delay}`}
+          onClick={onClick}
+          onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+          style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:"20px",padding:"24px 20px",cursor:"pointer",transition:"all 0.3s ease",transform:hov?"translateY(-4px)":"none",boxShadow:hov?"0 12px 40px rgba(37,99,235,0.12)":"0 2px 8px rgba(0,0,0,0.03)"}}>
+          <div style={{width:"56px",height:"56px",borderRadius:"16px",background:color,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:"16px"}}>{icon}</div>
+          <h3 style={{fontSize:"17px",fontWeight:700,color:"#0f172a",marginBottom:"6px"}}>{title}</h3>
+          <p style={{fontSize:"13px",color:"#94a3b8",lineHeight:1.5}}>{desc}</p>
+        </div>
+      );
+    }
+
     /* ═══════════════════════════════════════════════
        EXTRACT CARD DATA FROM OCR TEXT
        ═══════════════════════════════════════════════ */
@@ -202,7 +217,21 @@
       const [cameraError, setCameraError] = useState("");
       const [scanCountdown, setScanCountdown] = useState(0);
       const [beneficiary, setBeneficiary] = useState(null);
-      const [dashTab, setDashTab] = useState("eligibility");
+      const [subPage, setSubPage] = useState(null);
+      // Chat state (Find Care)
+      const [chatMessages, setChatMessages] = useState([]);
+      const [chatInput, setChatInput] = useState("");
+      const [chatLoading, setChatLoading] = useState(false);
+      const chatEndRef = useRef(null);
+      // Letter scanner state (Read a Letter)
+      const [letterState, setLetterState] = useState("idle"); // idle | camera | processing | scanned | summarizing | done
+      const [letterText, setLetterText] = useState("");
+      const [letterSummary, setLetterSummary] = useState("");
+      const [letterProgress, setLetterProgress] = useState(0);
+      const letterVideoRef = useRef(null);
+      const letterCanvasRef = useRef(null);
+      const letterStreamRef = useRef(null);
+
       const videoRef = useRef(null);
       const canvasRef = useRef(null);
       const streamRef = useRef(null);
@@ -351,14 +380,117 @@
           const result = await res.json();
           if (result.success) {
             setBeneficiary(result.data);
-            setDashTab("eligibility");
-            setStep("dashboard");
+            setSubPage(null);
+            setStep("home");
           }
         } catch (e) {
           console.error("Save card error:", e);
         }
         setLoading(false);
       };
+
+      // ── Chat helpers (Find Care) ──
+      const sendChatMessage = async () => {
+        const msg = chatInput.trim();
+        if (!msg || chatLoading) return;
+        const newMessages = [...chatMessages, { role: "user", content: msg }];
+        setChatMessages(newMessages);
+        setChatInput("");
+        setChatLoading(true);
+        try {
+          const res = await fetch(API + "/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: newMessages }),
+          });
+          const data = await res.json();
+          if (data.reply) {
+            setChatMessages(prev => [...prev, { role: "assistant", content: data.reply }]);
+          } else {
+            setChatMessages(prev => [...prev, { role: "assistant", content: "Sorry, something went wrong. Please try again." }]);
+          }
+        } catch (e) {
+          setChatMessages(prev => [...prev, { role: "assistant", content: "Could not reach the server. Please check your connection." }]);
+        }
+        setChatLoading(false);
+      };
+
+      useEffect(() => {
+        if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+      }, [chatMessages]);
+
+      // ── Letter scanner helpers ──
+      const startLetterCamera = async () => {
+        setLetterState("camera");
+        setLetterText("");
+        setLetterSummary("");
+        setLetterProgress(0);
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } }
+          });
+          letterStreamRef.current = stream;
+          if (letterVideoRef.current) {
+            letterVideoRef.current.srcObject = stream;
+            letterVideoRef.current.onloadedmetadata = () => letterVideoRef.current.play();
+          }
+        } catch (err) {
+          setLetterState("idle");
+          alert("Could not access camera: " + err.message);
+        }
+      };
+
+      const stopLetterCamera = () => {
+        if (letterStreamRef.current) {
+          letterStreamRef.current.getTracks().forEach(t => t.stop());
+          letterStreamRef.current = null;
+        }
+      };
+
+      const captureAndScanLetter = async () => {
+        if (!letterVideoRef.current || !letterCanvasRef.current) return;
+        const video = letterVideoRef.current;
+        const canvas = letterCanvasRef.current;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d").drawImage(video, 0, 0);
+        stopLetterCamera();
+        setLetterState("processing");
+        setLetterProgress(0);
+        try {
+          const result = await Tesseract.recognize(canvas, "eng", {
+            logger: (m) => { if (m.status === "recognizing text") setLetterProgress(Math.round(m.progress * 100)); }
+          });
+          setLetterText(result.data.text);
+          setLetterState("scanned");
+        } catch (err) {
+          setLetterState("idle");
+          alert("Failed to read the letter. Please try again.");
+        }
+      };
+
+      const summarizeLetter = async () => {
+        if (!letterText) return;
+        setLetterState("summarizing");
+        try {
+          const res = await fetch(API + "/summarize-letter", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: letterText }),
+          });
+          const data = await res.json();
+          setLetterSummary(data.summary || "Could not generate summary.");
+          setLetterState("done");
+        } catch (e) {
+          setLetterSummary("Failed to summarize. Please try again.");
+          setLetterState("done");
+        }
+      };
+
+      // Clean up letter camera when leaving sub-page
+      useEffect(() => {
+        if (subPage !== "read-letter") stopLetterCamera();
+      }, [subPage]);
 
       const sendCode = async()=>{
         if(phone.length!==10){setError("Enter a full 10-digit phone number.");return;}
@@ -400,7 +532,7 @@
                   <div style={{width:"42px",height:"42px",borderRadius:"12px",background:"linear-gradient(135deg,#dc2626,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center"}}>
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
                   </div>
-                  <span style={{fontSize:"20px",fontWeight:800,color:"#1e293b",letterSpacing:"-0.3px"}}>Health Helper</span>
+                  <span style={{fontSize:"20px",fontWeight:800,color:"#1e293b",letterSpacing:"-0.3px"}}>Demo Care</span>
                 </div>
                 <button onClick={()=>setStep("phone")} style={{padding:"10px 24px",fontSize:"15px",fontWeight:600,background:"#fff",border:"1px solid #e2e8f0",borderRadius:"12px",color:"#2563eb",cursor:"pointer",transition:"all 0.2s",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>Sign In</button>
               </nav>
@@ -411,7 +543,7 @@
                   No passwords. No complicated forms.
                 </div>
                 <h1 className="fade-up-d1" style={{fontSize:"clamp(40px,6vw,68px)",fontWeight:900,lineHeight:1.08,letterSpacing:"-2px",marginBottom:"24px",color:"#0f172a"}}>
-                  Your health benefits,<br/><span style={{background:"linear-gradient(135deg,#dc2626,#2563eb)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>finally simple.</span>
+                  Democratizing your benefit info,<br/><span style={{background:"linear-gradient(135deg,#dc2626,#2563eb)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>one prompt at a time!</span>
                 </h1>
                 <p className="fade-up-d2" style={{fontSize:"20px",color:"#64748b",lineHeight:1.7,maxWidth:"520px",margin:"0 auto 44px"}}>
                   Scan your insurance card, find in-network care, and book free rides to your appointments.
@@ -530,7 +662,7 @@
                   Scan My Insurance Card
                 </span>
               </PrimaryButton>
-              <button onClick={()=>alert("Skipping to dashboard...")} style={{background:"none",border:"none",color:"#94a3b8",fontSize:"15px",cursor:"pointer",marginTop:"16px",textDecoration:"underline"}}>Skip for now</button>
+              <button onClick={()=>{setSubPage(null);setStep("home");}} style={{background:"none",border:"none",color:"#94a3b8",fontSize:"15px",cursor:"pointer",marginTop:"16px",textDecoration:"underline"}}>Skip for now</button>
             </Card>
           </div>
         );
@@ -696,237 +828,324 @@
         );
       }
 
-      /* ══════════ DASHBOARD — Beneficiary Record ══════════ */
-      if (step === "dashboard" && beneficiary) {
-        const d = beneficiary;
-        const has = (v) => v && v !== "—";
-        const tabStyle = (id) => ({
-          padding:"10px 18px",fontSize:"14px",fontWeight:600,
-          background:dashTab===id?"#2563eb":"transparent",
-          color:dashTab===id?"#fff":"#64748b",
-          border:"none",borderRadius:"10px",cursor:"pointer",
-          transition:"all 0.2s",whiteSpace:"nowrap",
-        });
-        const sectionCard = (children, delay="") => (
-          <div className={`fade-up${delay?" fade-up-d"+delay:""}`} style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:"16px",padding:"24px",marginBottom:"16px"}}>
-            {children}
-          </div>
-        );
-        const row = (label, value, color="#1e293b") => (
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #f1f5f9"}}>
-            <span style={{fontSize:"14px",color:"#94a3b8",fontWeight:500}}>{label}</span>
-            <span style={{fontSize:"15px",fontWeight:600,color: !has(value) ? "#cbd5e1" : color, textAlign:"right",maxWidth:"60%",fontStyle: !has(value) ? "italic" : "normal"}}>{value}</span>
-          </div>
-        );
-        const badge = (text, color, bg) => (
-          <span style={{display:"inline-flex",alignItems:"center",gap:"5px",padding:"4px 12px",borderRadius:"100px",fontSize:"13px",fontWeight:600,color,background:bg}}>{text}</span>
-        );
-        const statusBadge = has(d.eligibility.status)
-          ? badge("Active", "#16a34a", "#f0fdf4")
-          : badge("Unknown", "#94a3b8", "#f1f5f9");
+      /* ══════════ HOME — Dashboard with 4 actions ══════════ */
+      if (step === "home") {
+        const greeting = () => {
+          const h = new Date().getHours();
+          if (h < 12) return "Good morning";
+          if (h < 18) return "Good afternoon";
+          return "Good evening";
+        };
+        const userName = beneficiary?.personal?.fullName && beneficiary.personal.fullName !== "—"
+          ? beneficiary.personal.fullName.split(" ")[0]
+          : "";
+        const actionCards = [
+          { id:"find-care", icon:<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>, title:"Find Care", desc:"Search for in-network doctors, clinics, and hospitals near you.", color:"linear-gradient(135deg,#2563eb,#3b82f6)" },
+          { id:"read-letter", icon:<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>, title:"Read a Letter", desc:"Scan and simplify confusing medical mail and EOBs.", color:"linear-gradient(135deg,#dc2626,#ef4444)" },
+          { id:"extra-benefits", icon:<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.27 5.82 22 7 14.14l-5-4.87 6.91-1.01z"/></svg>, title:"My Extra Benefits", desc:"Discover dental, vision, hearing, OTC, and transportation benefits.", color:"linear-gradient(135deg,#7c3aed,#8b5cf6)" },
+          { id:"talk-helper", icon:<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>, title:"Talk to My Helper", desc:"Ask questions about your benefits, coverage, or claims.", color:"linear-gradient(135deg,#059669,#10b981)" },
+        ];
 
         return (
           <div style={{minHeight:"100vh",position:"relative",background:"#f8fafc"}}>
             <AnimatedBG/>
-            <div style={{position:"relative",zIndex:1,maxWidth:"720px",margin:"0 auto",padding:"24px 16px 64px"}}>
+            <div style={{position:"relative",zIndex:1,maxWidth:"600px",margin:"0 auto",padding:"0 16px 64px"}}>
 
-              {/* Header */}
-              <div className="fade-up" style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px"}}>
-                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                  <div style={{width:"44px",height:"44px",borderRadius:"12px",background:"linear-gradient(135deg,#dc2626,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+              {/* Top bar */}
+              <div className="fade-in" style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"20px 0"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+                  <div style={{width:"40px",height:"40px",borderRadius:"12px",background:"linear-gradient(135deg,#dc2626,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
                   </div>
+                  <span style={{fontSize:"18px",fontWeight:800,color:"#0f172a"}}>Demo Care</span>
+                </div>
+                <button onClick={()=>{setStep("landing");setBeneficiary(null);setUserData(null);setPhone("");setCode("");}} style={{padding:"8px 16px",fontSize:"13px",fontWeight:600,background:"#fff",border:"1px solid #e2e8f0",borderRadius:"10px",color:"#64748b",cursor:"pointer"}}>Sign Out</button>
+              </div>
+
+              {/* Greeting */}
+              <div className="fade-up" style={{marginBottom:"28px"}}>
+                <h1 style={{fontSize:"28px",fontWeight:900,color:"#0f172a",marginBottom:"6px"}}>
+                  {greeting()}{userName ? ", " + userName : ""} 
+                </h1>
+                <p style={{fontSize:"16px",color:"#94a3b8",lineHeight:1.6}}>What would you like to do today?</p>
+              </div>
+
+              {/* Card ID mini banner */}
+              {beneficiary && beneficiary.personal.mbi !== "—" && (
+                <div className="fade-up-d1" style={{background:"linear-gradient(135deg,#1e3a5f,#2563eb)",borderRadius:"16px",padding:"18px 22px",marginBottom:"24px",color:"#fff",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                   <div>
-                    <div style={{fontSize:"18px",fontWeight:800,color:"#0f172a"}}>Health Helper</div>
-                    <div style={{fontSize:"13px",color:"#94a3b8"}}>Beneficiary Record</div>
+                    <p style={{fontSize:"11px",opacity:0.6,textTransform:"uppercase",letterSpacing:"0.8px"}}>Your Card ID</p>
+                    <p style={{fontSize:"20px",fontWeight:800,fontFamily:"monospace",letterSpacing:"1.5px"}}>{beneficiary.personal.mbi}</p>
                   </div>
-                </div>
-                <button onClick={()=>{setStep("success");setBeneficiary(null);}} style={{padding:"8px 16px",fontSize:"13px",fontWeight:600,background:"#fff",border:"1px solid #e2e8f0",borderRadius:"10px",color:"#64748b",cursor:"pointer"}}>Sign Out</button>
-              </div>
-
-              {/* Card Banner — built from scanned data */}
-              <div className="fade-up" style={{background:"linear-gradient(135deg,#1e3a5f,#2563eb)",borderRadius:"20px",padding:"28px",marginBottom:"24px",color:"#fff"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"16px"}}>
-                  <div>
-                    <p style={{fontSize:"12px",opacity:0.6,textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>Card / Member ID</p>
-                    <p style={{fontSize:"28px",fontWeight:900,letterSpacing:"2px",fontFamily:"monospace"}}>{d.personal.mbi}</p>
-                  </div>
-                  <div style={{display:"flex",gap:"4px"}}><div style={{width:"12px",height:"12px",borderRadius:"50%",background:"#dc2626"}}/><div style={{width:"12px",height:"12px",borderRadius:"50%",background:"#fff"}}/><div style={{width:"12px",height:"12px",borderRadius:"50%",background:"#60a5fa"}}/></div>
-                </div>
-                <div style={{display:"flex",gap:"24px",flexWrap:"wrap"}}>
-                  {has(d.personal.fullName)&&<div><p style={{fontSize:"11px",opacity:0.5,marginBottom:"2px"}}>Name</p><p style={{fontSize:"16px",fontWeight:700}}>{d.personal.fullName}</p></div>}
-                  {has(d.personal.dateOfBirth)&&<div><p style={{fontSize:"11px",opacity:0.5,marginBottom:"2px"}}>DOB</p><p style={{fontSize:"16px",fontWeight:700}}>{d.personal.dateOfBirth}</p></div>}
-                  {has(d.plan.name)&&<div><p style={{fontSize:"11px",opacity:0.5,marginBottom:"2px"}}>Plan</p><p style={{fontSize:"16px",fontWeight:700}}>{d.plan.name}</p></div>}
-                  <div><p style={{fontSize:"11px",opacity:0.5,marginBottom:"2px"}}>Status</p>{statusBadge}</div>
-                </div>
-              </div>
-
-              {/* Tab Navigation */}
-              <div className="fade-up-d1" style={{display:"flex",gap:"6px",overflowX:"auto",marginBottom:"20px",background:"rgba(255,255,255,0.8)",backdropFilter:"blur(12px)",borderRadius:"14px",padding:"6px",border:"1px solid #e2e8f0"}}>
-                {[
-                  {id:"eligibility",label:"Eligibility"},
-                  {id:"plan",label:"Plan"},
-                  {id:"claims",label:"Claims"},
-                  {id:"personal",label:"Personal Info"},
-                  {id:"ssa",label:"SSA Record"},
-                ].map(t=>(
-                  <button key={t.id} onClick={()=>setDashTab(t.id)} style={tabStyle(t.id)}>{t.label}</button>
-                ))}
-              </div>
-
-              {/* ── TAB: ELIGIBILITY ── */}
-              {dashTab==="eligibility"&&(
-                <div>
-                  {sectionCard(<>
-                    <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a",marginBottom:"4px"}}>Eligibility Details</h3>
-                    <p style={{fontSize:"13px",color:"#94a3b8",marginBottom:"16px"}}>Coverage status and enrollment read from your card</p>
-                    {row("Overall Status", statusBadge)}
-                    {row("Part A (Hospital)", d.eligibility.partA.enrolled ? "Enrolled — since " + d.eligibility.partA.effectiveDate : "Not found on card", d.eligibility.partA.enrolled ? "#2563eb" : "#cbd5e1")}
-                    {has(d.eligibility.partA.premium) && row("Part A Premium", d.eligibility.partA.premium)}
-                    {row("Part B (Medical)", d.eligibility.partB.enrolled ? "Enrolled — since " + d.eligibility.partB.effectiveDate : "Not found on card", d.eligibility.partB.enrolled ? "#2563eb" : "#cbd5e1")}
-                    {has(d.eligibility.partB.premium) && row("Part B Premium", d.eligibility.partB.premium)}
-                    {row("Part D (Prescription)", d.eligibility.partD.enrolled ? "Enrolled — since " + d.eligibility.partD.effectiveDate : "Not found on card", d.eligibility.partD.enrolled ? "#2563eb" : "#cbd5e1")}
-                    {has(d.eligibility.partD.premium) && row("Part D Premium", d.eligibility.partD.premium)}
-                    {d.eligibility.esrd && row("ESRD (End-Stage Renal)", "Yes", "#dc2626")}
-                    {d.eligibility.hospice && row("Hospice Benefit", "Yes", "#dc2626")}
-                    {has(d.eligibility.dualEligible) && row("Dual Eligible (Medicaid)", d.eligibility.dualEligible, "#7c3aed")}
-                  </>)}
-                </div>
-              )}
-
-              {/* ── TAB: PLAN ENROLLMENT ── */}
-              {dashTab==="plan"&&(
-                <div>
-                  {sectionCard(<>
-                    <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a",marginBottom:"4px"}}>Plan Enrollment</h3>
-                    <p style={{fontSize:"13px",color:"#94a3b8",marginBottom:"16px"}}>Health plan details read from your card</p>
-                    {row("Plan Name", d.plan.name, has(d.plan.name) ? "#2563eb" : "#cbd5e1")}
-                    {row("Carrier", d.plan.carrier)}
-                    {has(d.plan.contractId) && row("Contract ID", d.plan.contractId)}
-                    {has(d.plan.pbpId) && row("PBP ID", d.plan.pbpId)}
-                    {row("Member ID", d.plan.memberId, "#0f172a")}
-                    {row("Group Number", d.plan.groupNumber)}
-                    {row("Effective Date", d.plan.effectiveDate)}
-                    {has(d.plan.lisSubsidy) && row("LIS / Extra Help", d.plan.lisSubsidy, "#7c3aed")}
-                  </>)}
-
-                  {sectionCard(<>
-                    <h3 style={{fontSize:"16px",fontWeight:700,color:"#0f172a",marginBottom:"16px"}}>Copay Summary</h3>
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:"10px"}}>
-                      {Object.entries(d.plan.copaySummary).map(([k,v])=>(
-                        <div key={k} style={{background:"#f8fafc",borderRadius:"12px",padding:"14px",textAlign:"center",border:"1px solid #f1f5f9"}}>
-                          <div style={{fontSize:"22px",fontWeight:800,color:v==="$0"?"#16a34a": has(v) ? "#2563eb" : "#cbd5e1"}}>{v}</div>
-                          <div style={{fontSize:"12px",color:"#94a3b8",fontWeight:500,marginTop:"4px",textTransform:"capitalize"}}>{k.replace(/([A-Z])/g," $1").trim()}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </>,"1")}
-                </div>
-              )}
-
-              {/* ── TAB: CLAIMS & PAYMENTS ── */}
-              {dashTab==="claims"&&(
-                <div>
-                  {sectionCard(<>
-                    <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a",marginBottom:"4px"}}>Claims & Payments</h3>
-                    <p style={{fontSize:"13px",color:"#94a3b8"}}>Claims and benefit info extracted from your card</p>
-                  </>)}
-
-                  {d.claims && d.claims.length > 0 ? d.claims.map((c,i)=>(
-                    <div key={i} className={`fade-up-d${Math.min(i+1,4)}`} style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:"14px",padding:"18px 20px",marginBottom:"10px"}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"10px"}}>
-                        <div>
-                          <div style={{fontSize:"15px",fontWeight:700,color:"#0f172a"}}>{c.provider}</div>
-                          <div style={{fontSize:"13px",color:"#64748b",marginTop:"2px"}}>{c.type}</div>
-                        </div>
-                        <div style={{textAlign:"right"}}>
-                          {has(c.date)&&<div style={{fontSize:"13px",color:"#94a3b8"}}>{c.date}</div>}
-                          {has(c.status)&&badge(c.status, "#16a34a", "#f0fdf4")}
-                        </div>
-                      </div>
-                      {(has(c.billed)||has(c.allowed)||has(c.paid)||has(c.youOwe))&&(
-                        <div style={{display:"flex",gap:"16px",flexWrap:"wrap",borderTop:"1px solid #f1f5f9",paddingTop:"10px"}}>
-                          {has(c.billed)&&<div><span style={{fontSize:"11px",color:"#94a3b8",display:"block"}}>Billed</span><span style={{fontSize:"14px",fontWeight:600,color:"#64748b"}}>{c.billed}</span></div>}
-                          {has(c.allowed)&&<div><span style={{fontSize:"11px",color:"#94a3b8",display:"block"}}>Allowed</span><span style={{fontSize:"14px",fontWeight:600}}>{c.allowed}</span></div>}
-                          {has(c.paid)&&<div><span style={{fontSize:"11px",color:"#94a3b8",display:"block"}}>Paid</span><span style={{fontSize:"14px",fontWeight:600,color:"#2563eb"}}>{c.paid}</span></div>}
-                          {has(c.youOwe)&&<div><span style={{fontSize:"11px",color:"#94a3b8",display:"block"}}>You Owe</span><span style={{fontSize:"14px",fontWeight:700,color:"#dc2626"}}>{c.youOwe}</span></div>}
-                        </div>
-                      )}
-                    </div>
-                  )) : (
-                    <div className="fade-up-d1" style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:"14px",padding:"40px 20px",textAlign:"center"}}>
-                      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5" style={{margin:"0 auto 12px",display:"block"}}><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>
-                      <p style={{fontSize:"15px",color:"#94a3b8",fontWeight:500}}>No claims data found on card</p>
-                      <p style={{fontSize:"13px",color:"#cbd5e1",marginTop:"4px"}}>Claims history would appear here once connected to your plan</p>
+                  {beneficiary.plan && beneficiary.plan.name !== "—" && (
+                    <div style={{textAlign:"right"}}>
+                      <p style={{fontSize:"11px",opacity:0.6}}>Plan</p>
+                      <p style={{fontSize:"14px",fontWeight:600}}>{beneficiary.plan.name}</p>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* ── TAB: PERSONAL INFO ── */}
-              {dashTab==="personal"&&(
-                <div>
-                  {sectionCard(<>
-                    <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a",marginBottom:"4px"}}>Personal Information</h3>
-                    <p style={{fontSize:"13px",color:"#94a3b8",marginBottom:"16px"}}>Details extracted from your card</p>
-                    {row("Member / Card ID", d.personal.mbi, "#2563eb")}
-                    {row("Full Name", d.personal.fullName)}
-                    {row("Date of Birth", d.personal.dateOfBirth)}
-                    {has(d.personal.gender) && row("Gender", d.personal.gender)}
-                    {has(d.personal.phone) && row("Phone", d.personal.phone)}
-                    {has(d.personal.address) && row("Address", d.personal.address)}
-                    {has(d.personal.city) && row("City", d.personal.city)}
-                    {has(d.personal.state) && row("State", d.personal.state)}
-                    {has(d.personal.zip) && row("ZIP", d.personal.zip)}
-                  </>)}
-
-                  {/* Any extra key-value fields the OCR picked up */}
-                  {d.rawFields && d.rawFields.length > 0 && sectionCard(<>
-                    <h3 style={{fontSize:"16px",fontWeight:700,color:"#0f172a",marginBottom:"4px"}}>Additional Fields Found</h3>
-                    <p style={{fontSize:"13px",color:"#94a3b8",marginBottom:"16px"}}>Other text recognized on your card</p>
-                    {d.rawFields.map((f,i)=> row(f.label, f.value))}
-                  </>,"1")}
-                </div>
-              )}
-
-              {/* ── TAB: SSA RECORD ── */}
-              {dashTab==="ssa"&&(
-                <div>
-                  {sectionCard(<>
-                    <div style={{display:"flex",alignItems:"center",gap:"10px",marginBottom:"16px"}}>
-                      <div style={{width:"40px",height:"40px",borderRadius:"10px",background:"linear-gradient(135deg,#1e3a5f,#2563eb)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/></svg>
-                      </div>
-                      <div>
-                        <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a"}}>Social Security Record</h3>
-                        <p style={{fontSize:"13px",color:"#94a3b8"}}>Official SSA data on file</p>
-                      </div>
-                    </div>
-                    <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:"12px",padding:"12px 16px",marginBottom:"16px",display:"flex",alignItems:"center",gap:"8px"}}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2"><path d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                      <span style={{fontSize:"13px",color:"#92400e",fontWeight:500}}>This data is derived from what was read on your card.</span>
-                    </div>
-                    {row("Name on Record", d.ssaRecord.nameOnRecord)}
-                    {row("Address on Record", d.ssaRecord.address)}
-                    {row("Date of Birth", d.ssaRecord.dateOfBirth)}
-                    {has(d.ssaRecord.ssn) && row("SSN (masked)", d.ssaRecord.ssn, "#64748b")}
-                    {row("Claim Number", d.ssaRecord.claimNumber, "#2563eb")}
-                  </>)}
-                </div>
-              )}
-
-              {/* Footer */}
-              <div style={{textAlign:"center",marginTop:"24px",paddingBottom:"16px"}}>
-                <div style={{display:"flex",gap:"16px",justifyContent:"center",flexWrap:"wrap"}}>
-                  {["HIPAA Compliant","256-bit Encrypted","CMS Verified"].map((t,i)=>(
-                    <span key={i} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"12px",color:"#94a3b8",fontWeight:500}}>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>{t}
-                    </span>
-                  ))}
-                </div>
+              {/* 4 Action Cards */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"14px"}}>
+                {actionCards.map((card, i) => (
+                  <ActionCard key={card.id} icon={card.icon} title={card.title} desc={card.desc} color={card.color} delay={i+1} onClick={()=>setSubPage(card.id)} />
+                ))}
               </div>
 
+              {/* Quick action: rescan */}
+              <div className="fade-up-d4" style={{marginTop:"24px",textAlign:"center"}}>
+                <button onClick={()=>{resetScanner();setStep("scanner");}} style={{background:"none",border:"2px solid #e2e8f0",borderRadius:"14px",padding:"14px 28px",color:"#64748b",fontSize:"15px",fontWeight:600,cursor:"pointer",transition:"all 0.2s",display:"inline-flex",alignItems:"center",gap:"8px"}}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                  Scan Another Card
+                </button>
+              </div>
+
+              {/* Footer */}
+              <div style={{display:"flex",gap:"16px",justifyContent:"center",flexWrap:"wrap",marginTop:"32px"}}>
+                {["HIPAA Compliant","256-bit Encrypted","CMS Verified"].map((t,i)=>(
+                  <span key={i} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"12px",color:"#cbd5e1",fontWeight:500}}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>{t}
+                  </span>
+                ))}
+              </div>
             </div>
+
+            {/* ── SUB-PAGE OVERLAY ── */}
+            {subPage && (
+              <div style={{position:"fixed",inset:0,zIndex:100,background:"#f8fafc",overflowY:"auto"}}>
+                <div style={{maxWidth:"600px",margin:"0 auto",padding:"24px 16px 64px"}}>
+                  {/* Sub-page header */}
+                  <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"28px"}}>
+                    <button onClick={()=>{stopLetterCamera();setLetterState("idle");setLetterText("");setLetterSummary("");setSubPage(null);}} style={{width:"40px",height:"40px",borderRadius:"12px",background:"#fff",border:"1px solid #e2e8f0",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1e293b" strokeWidth="2"><path d="M19 12H5m7-7l-7 7 7 7"/></svg>
+                    </button>
+                    <h2 style={{fontSize:"22px",fontWeight:800,color:"#0f172a"}}>
+                      {subPage==="find-care"&&"Find Care"}
+                      {subPage==="read-letter"&&"Read a Letter"}
+                      {subPage==="extra-benefits"&&"My Extra Benefits"}
+                      {subPage==="talk-helper"&&"Talk to My Helper"}
+                    </h2>
+                  </div>
+
+                  {/* ── FIND CARE (Chat) ── */}
+                  {subPage==="find-care"&&(
+                    <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 120px)"}}>
+                      {/* Messages area */}
+                      <div style={{flex:1,overflowY:"auto",paddingBottom:"16px"}}>
+                        {chatMessages.length===0&&(
+                          <div style={{textAlign:"center",padding:"48px 20px"}}>
+                            <div style={{width:"80px",height:"80px",borderRadius:"24px",margin:"0 auto 20px",background:"linear-gradient(135deg,#2563eb,#3b82f6)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                              <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                            </div>
+                            <h3 style={{fontSize:"22px",fontWeight:800,color:"#0f172a",marginBottom:"8px"}}>Find Care</h3>
+                            <p style={{fontSize:"15px",color:"#94a3b8",lineHeight:1.7,maxWidth:"360px",margin:"0 auto 24px"}}>Ask me anything about finding doctors, understanding your coverage, or navigating your benefits.</p>
+                            <div style={{display:"flex",flexWrap:"wrap",gap:"8px",justifyContent:"center"}}>
+                              {["Find a doctor near me","What does my plan cover?","How do I get a referral?","Explain my copay"].map(q=>(
+                                <button key={q} onClick={()=>{setChatInput(q);}} style={{padding:"10px 16px",fontSize:"13px",fontWeight:600,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:"12px",color:"#2563eb",cursor:"pointer",transition:"all 0.2s"}}>{q}</button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {chatMessages.map((msg,i)=>(
+                          <div key={i} style={{display:"flex",justifyContent:msg.role==="user"?"flex-end":"flex-start",marginBottom:"12px"}}>
+                            <div style={{maxWidth:"85%",padding:"14px 18px",borderRadius:msg.role==="user"?"18px 18px 4px 18px":"18px 18px 18px 4px",background:msg.role==="user"?"linear-gradient(135deg,#2563eb,#3b82f6)":"#fff",color:msg.role==="user"?"#fff":"#1e293b",fontSize:"15px",lineHeight:1.6,boxShadow:msg.role==="user"?"none":"0 1px 4px rgba(0,0,0,0.06)",border:msg.role==="user"?"none":"1px solid #e2e8f0",whiteSpace:"pre-wrap"}}>
+                              {msg.content}
+                            </div>
+                          </div>
+                        ))}
+                        {chatLoading&&(
+                          <div style={{display:"flex",justifyContent:"flex-start",marginBottom:"12px"}}>
+                            <div style={{padding:"14px 18px",borderRadius:"18px 18px 18px 4px",background:"#fff",border:"1px solid #e2e8f0",display:"flex",gap:"6px",alignItems:"center"}}>
+                              <span style={{width:"8px",height:"8px",borderRadius:"50%",background:"#94a3b8",animation:"pulse 1s ease-in-out infinite"}}/>
+                              <span style={{width:"8px",height:"8px",borderRadius:"50%",background:"#94a3b8",animation:"pulse 1s ease-in-out 0.2s infinite"}}/>
+                              <span style={{width:"8px",height:"8px",borderRadius:"50%",background:"#94a3b8",animation:"pulse 1s ease-in-out 0.4s infinite"}}/>
+                            </div>
+                          </div>
+                        )}
+                        <div ref={chatEndRef}/>
+                      </div>
+                      {/* Input area */}
+                      <div style={{borderTop:"1px solid #e2e8f0",paddingTop:"12px",background:"#f8fafc"}}>
+                        <div style={{display:"flex",gap:"10px",alignItems:"flex-end"}}>
+                          <div style={{flex:1,borderRadius:"16px",border:"2px solid #e2e8f0",background:"#fff",overflow:"hidden",transition:"border-color 0.2s"}}>
+                            <textarea value={chatInput} onChange={e=>setChatInput(e.target.value)}
+                              onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatMessage();}}}
+                              placeholder="Ask about your health benefits..."
+                              rows={1}
+                              style={{width:"100%",padding:"14px 16px",fontSize:"15px",border:"none",outline:"none",resize:"none",fontFamily:"inherit",color:"#1e293b",background:"transparent",minHeight:"48px",maxHeight:"120px"}}/>
+                          </div>
+                          <button onClick={sendChatMessage} disabled={!chatInput.trim()||chatLoading}
+                            style={{width:"48px",height:"48px",borderRadius:"14px",border:"none",background:chatInput.trim()?"linear-gradient(135deg,#2563eb,#3b82f6)":"#e2e8f0",cursor:chatInput.trim()?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s"}}>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={chatInput.trim()?"white":"#94a3b8"} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── READ A LETTER (Scanner + Summary) ── */}
+                  {subPage==="read-letter"&&(
+                    <div>
+                      <canvas ref={letterCanvasRef} style={{display:"none"}}/>
+
+                      {/* IDLE — Intro screen */}
+                      {letterState==="idle"&&(
+                        <Card style={{padding:"40px 28px",textAlign:"center"}}>
+                          <div style={{width:"80px",height:"80px",borderRadius:"24px",margin:"0 auto 20px",background:"linear-gradient(135deg,#dc2626,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                            <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                          </div>
+                          <h3 style={{fontSize:"22px",fontWeight:800,color:"#0f172a",marginBottom:"8px"}}>Scan & Simplify</h3>
+                          <p style={{fontSize:"15px",color:"#94a3b8",lineHeight:1.7,marginBottom:"28px",maxWidth:"360px",margin:"0 auto 28px"}}>Take a photo of any medical letter, Explanation of Benefits (EOB), or confusing health mail. We'll read it and summarize it in plain English.</p>
+                          <PrimaryButton variant="red" onClick={startLetterCamera}>
+                            <span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"10px"}}>
+                              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                              Scan My Letter
+                            </span>
+                          </PrimaryButton>
+                        </Card>
+                      )}
+
+                      {/* CAMERA — Live viewfinder */}
+                      {letterState==="camera"&&(
+                        <Card style={{padding:"32px 24px",textAlign:"center"}}>
+                          <h3 style={{fontSize:"20px",fontWeight:800,color:"#0f172a",marginBottom:"6px"}}>Point at Your Letter</h3>
+                          <p style={{fontSize:"14px",color:"#94a3b8",marginBottom:"20px"}}>Hold the letter flat and tap Capture when it's in frame.</p>
+                          <div style={{position:"relative",borderRadius:"16px",overflow:"hidden",marginBottom:"20px",background:"#0f172a",minHeight:"280px"}}>
+                            <video ref={letterVideoRef} autoPlay playsInline muted style={{width:"100%",display:"block",borderRadius:"16px"}}/>
+                            <div style={{position:"absolute",inset:"6%",border:"2px dashed rgba(255,255,255,0.4)",borderRadius:"12px",pointerEvents:"none"}}/>
+                          </div>
+                          <div style={{display:"flex",gap:"10px"}}>
+                            <PrimaryButton variant="red" onClick={captureAndScanLetter} style={{fontSize:"17px",padding:"16px"}}>
+                              <span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}}>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/></svg>
+                                Capture
+                              </span>
+                            </PrimaryButton>
+                            <button onClick={()=>{stopLetterCamera();setLetterState("idle");}} style={{padding:"16px 20px",fontSize:"17px",fontWeight:600,background:"#fff",border:"2px solid #e2e8f0",borderRadius:"16px",color:"#64748b",cursor:"pointer",whiteSpace:"nowrap"}}>Cancel</button>
+                          </div>
+                        </Card>
+                      )}
+
+                      {/* PROCESSING — OCR in progress */}
+                      {letterState==="processing"&&(
+                        <Card style={{padding:"48px 28px",textAlign:"center"}}>
+                          <div style={{width:"80px",height:"80px",margin:"0 auto 24px",borderRadius:"50%",background:"#fef2f2",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                            <span style={{width:"40px",height:"40px",border:"4px solid #fecaca",borderTopColor:"#dc2626",borderRadius:"50%",display:"block",animation:"spin 0.8s linear infinite"}}/>
+                          </div>
+                          <h3 style={{fontSize:"20px",fontWeight:800,color:"#0f172a",marginBottom:"12px"}}>Reading Your Letter...</h3>
+                          <div style={{background:"#e2e8f0",borderRadius:"100px",height:"8px",overflow:"hidden",marginBottom:"12px",maxWidth:"300px",margin:"0 auto 12px"}}>
+                            <div style={{background:"linear-gradient(90deg,#dc2626,#ef4444)",height:"100%",borderRadius:"100px",width:letterProgress+"%",transition:"width 0.3s ease"}}/>
+                          </div>
+                          <p style={{fontSize:"14px",color:"#64748b"}}>Extracting text... {letterProgress}%</p>
+                        </Card>
+                      )}
+
+                      {/* SCANNED — Show raw text, offer to summarize */}
+                      {letterState==="scanned"&&(
+                        <div>
+                          <Card style={{padding:"28px 24px",marginBottom:"16px"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"16px"}}>
+                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                              <span style={{fontSize:"16px",fontWeight:700,color:"#16a34a"}}>Letter scanned successfully</span>
+                            </div>
+                            <div style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:"12px",padding:"16px",maxHeight:"240px",overflowY:"auto",marginBottom:"20px"}}>
+                              <p style={{fontSize:"13px",color:"#64748b",lineHeight:1.7,whiteSpace:"pre-wrap",fontFamily:"monospace"}}>{letterText}</p>
+                            </div>
+                            <PrimaryButton variant="red" onClick={summarizeLetter}>
+                              <span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"10px"}}>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M9 15h6M9 11h6"/></svg>
+                                Summarize in Plain English
+                              </span>
+                            </PrimaryButton>
+                          </Card>
+                          <div style={{display:"flex",gap:"10px"}}>
+                            <button onClick={()=>{setLetterState("idle");setLetterText("");}} style={{flex:1,padding:"14px",fontSize:"15px",fontWeight:600,background:"#fff",border:"2px solid #e2e8f0",borderRadius:"14px",color:"#64748b",cursor:"pointer"}}>Scan Another</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* SUMMARIZING — Loading state */}
+                      {letterState==="summarizing"&&(
+                        <Card style={{padding:"48px 28px",textAlign:"center"}}>
+                          <div style={{width:"80px",height:"80px",margin:"0 auto 24px",borderRadius:"50%",background:"#fef2f2",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                            <span style={{width:"40px",height:"40px",border:"4px solid #fecaca",borderTopColor:"#dc2626",borderRadius:"50%",display:"block",animation:"spin 0.8s linear infinite"}}/>
+                          </div>
+                          <h3 style={{fontSize:"20px",fontWeight:800,color:"#0f172a",marginBottom:"8px"}}>Translating to Plain English...</h3>
+                          <p style={{fontSize:"14px",color:"#94a3b8"}}>Our AI is simplifying your letter.</p>
+                        </Card>
+                      )}
+
+                      {/* DONE — Summary displayed */}
+                      {letterState==="done"&&(
+                        <div>
+                          <Card style={{padding:"28px 24px",marginBottom:"16px"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:"10px",marginBottom:"20px"}}>
+                              <div style={{width:"44px",height:"44px",borderRadius:"14px",background:"linear-gradient(135deg,#dc2626,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M9 15h6M9 11h6"/></svg>
+                              </div>
+                              <div>
+                                <h3 style={{fontSize:"18px",fontWeight:800,color:"#0f172a"}}>Your Letter, Simplified</h3>
+                                <p style={{fontSize:"13px",color:"#94a3b8"}}>Here's what this letter means in plain English</p>
+                              </div>
+                            </div>
+                            <div style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:"14px",padding:"20px",lineHeight:1.8}}>
+                              <p style={{fontSize:"15px",color:"#1e293b",whiteSpace:"pre-wrap"}}>{letterSummary}</p>
+                            </div>
+                          </Card>
+
+                          {/* Collapsed raw text */}
+                          <details style={{marginBottom:"16px"}}>
+                            <summary style={{fontSize:"14px",fontWeight:600,color:"#64748b",cursor:"pointer",padding:"12px 0"}}>View original scanned text</summary>
+                            <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:"12px",padding:"16px",maxHeight:"200px",overflowY:"auto",marginTop:"8px"}}>
+                              <p style={{fontSize:"12px",color:"#94a3b8",lineHeight:1.6,whiteSpace:"pre-wrap",fontFamily:"monospace"}}>{letterText}</p>
+                            </div>
+                          </details>
+
+                          <div style={{display:"flex",gap:"10px"}}>
+                            <PrimaryButton variant="red" onClick={()=>{setLetterState("idle");setLetterText("");setLetterSummary("");}}>
+                              Scan Another Letter
+                            </PrimaryButton>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── EXTRA BENEFITS (Coming Soon) ── */}
+                  {subPage==="extra-benefits"&&(
+                    <div>
+                      <Card style={{padding:"60px 28px",textAlign:"center"}}>
+                        <div style={{width:"80px",height:"80px",borderRadius:"24px",margin:"0 auto 24px",background:"linear-gradient(135deg,#7c3aed,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.27 5.82 22 7 14.14l-5-4.87 6.91-1.01z"/></svg>
+                        </div>
+                        <h3 style={{fontSize:"24px",fontWeight:800,color:"#0f172a",marginBottom:"10px"}}>My Extra Benefits</h3>
+                        <p style={{fontSize:"16px",color:"#94a3b8",lineHeight:1.7,maxWidth:"340px",margin:"0 auto 32px"}}>This feature is coming soon. You'll be able to explore dental, vision, hearing, OTC, transportation, and meal benefits here.</p>
+                        <div style={{background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:"16px",padding:"24px",display:"inline-block"}}>
+                          <p style={{fontSize:"15px",color:"#7c3aed",fontWeight:700}}>Coming Soon</p>
+                        </div>
+                      </Card>
+                    </div>
+                  )}
+
+                  {/* ── TALK TO HELPER (Coming Soon) ── */}
+                  {subPage==="talk-helper"&&(
+                    <div>
+                      <Card style={{padding:"60px 28px",textAlign:"center"}}>
+                        <div style={{width:"80px",height:"80px",borderRadius:"24px",margin:"0 auto 24px",background:"linear-gradient(135deg,#059669,#10b981)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                        </div>
+                        <h3 style={{fontSize:"24px",fontWeight:800,color:"#0f172a",marginBottom:"10px"}}>Talk to My Helper</h3>
+                        <p style={{fontSize:"16px",color:"#94a3b8",lineHeight:1.7,maxWidth:"340px",margin:"0 auto 32px"}}>This feature is coming soon. You'll be able to have a live conversation with your personal health benefits assistant.</p>
+                        <div style={{background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:"16px",padding:"24px",display:"inline-block"}}>
+                          <p style={{fontSize:"15px",color:"#059669",fontWeight:700}}>Coming Soon</p>
+                        </div>
+                      </Card>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         );
       }

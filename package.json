@@ -1,7 +1,7 @@
 {
-  "name": "health-helper-app",
+  "name": "demo-care",
   "version": "1.0.0",
-  "description": "Senior-friendly health helper signup with phone verification",
+  "description": "Democratizing your benefit information, one prompt at a time!",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
