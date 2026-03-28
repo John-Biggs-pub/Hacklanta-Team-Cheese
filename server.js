@@ -428,6 +428,68 @@ function parseRawText(raw) {
   return result;
 }
 
+// ── OpenAI helper ──
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || ;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+
+async function callOpenAI(messages, systemPrompt) {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      messages: [{ role: "system", content: systemPrompt }, ...messages],
+      max_tokens: 1024,
+    }),
+  });
+  const data = await response.json();
+  if (data.error) throw new Error(data.error.message || "OpenAI API error");
+  return data.choices?.[0]?.message?.content || "No response generated.";
+}
+
+// POST /api/chat
+// Accepts { messages: [{role, content}] } → returns OpenAI response
+app.post("/api/chat", async (req, res) => {
+  const { messages } = req.body;
+  if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: "Messages array is required." });
+  }
+
+  try {
+    const reply = await callOpenAI(
+      messages,
+      "You are a helpful health benefits assistant called Demo Care. You help people understand their Medicare, Medicaid, and health insurance benefits in plain, simple English. Be warm, concise, and supportive. If you're unsure about specific plan details, advise the user to call the number on the back of their insurance card."
+    );
+    res.json({ success: true, reply });
+  } catch (err) {
+    console.error("Chat API error:", err);
+    res.status(500).json({ error: err.message || "Failed to reach AI service." });
+  }
+});
+
+// POST /api/summarize-letter
+// Accepts { text } (OCR'd letter text) → returns plain-English summary via OpenAI
+app.post("/api/summarize-letter", async (req, res) => {
+  const { text } = req.body;
+  if (!text || text.trim().length < 10) {
+    return res.status(400).json({ error: "Letter text is too short to summarize." });
+  }
+
+  try {
+    const summary = await callOpenAI(
+      [{ role: "user", content: `Please summarize this letter in plain English:\n\n${text}` }],
+      "You are a helpful assistant that translates complex medical and insurance letters into plain, simple English. When summarizing, organize the information into clear sections: 1) What is this letter about? 2) Key details (dates, amounts, names) 3) What action is needed, if any? 4) Important deadlines. Use bullet points and bold text for clarity. Be warm and reassuring."
+    );
+    res.json({ success: true, summary, rawText: text });
+  } catch (err) {
+    console.error("Summarize API error:", err);
+    res.status(500).json({ error: err.message || "Failed to reach AI service." });
+  }
+});
+
 // DELETE /api/users/:phone
 // Remove a user (admin)
 app.delete("/api/users/:phone", (req, res) => {
@@ -446,7 +508,7 @@ app.get("*", (req, res) => {
 // ── Start ──
 initDB().then(() => {
   app.listen(PORT, () => {
-    console.log(`\n  Health Helper server running at http://localhost:${PORT}`);
+    console.log(`\n  Demo Care server running at http://localhost:${PORT}`);
     console.log(`  Admin panel (JSON): http://localhost:${PORT}/api/users\n`);
   });
 });
