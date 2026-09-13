@@ -505,6 +505,48 @@
         }
       };
 
+      const handleLetterUpload = async (event) => {
+        const input = event.target;
+        const file = input.files?.[0];
+
+        if (!file) return;
+
+        stopLetterCamera();
+        setLetterText("");
+        setLetterSummary("");
+        setLetterState("processing");
+        setLetterProgress(0);
+
+        try {
+          const result = await Tesseract.recognize(
+            file,
+            "eng",
+            {
+              logger: (m) => {
+                if (m.status === "recognizing text") {
+                  setLetterProgress(Math.round(m.progress * 100));
+                }
+              }
+            }
+          );
+
+          const extractedText = result.data.text.trim();
+
+          if (!extractedText) {
+            throw new Error("No text detected in uploaded image.");
+          }
+
+          setLetterText(extractedText);
+          setLetterState("scanned");
+        } catch (err) {
+          console.error("Letter upload OCR error:", err);
+          setLetterState("idle");
+          alert("Failed to read the uploaded letter. Please try a clearer image.");
+        } finally {
+          input.value = "";
+        }
+      };
+
       const summarizeLetter = async () => {
         if (!letterText) return;
         setLetterState("summarizing");
@@ -1061,6 +1103,20 @@
                               Scan My Letter
                             </span>
                           </PrimaryButton>
+                          <div style={{display:"flex",alignItems:"center",gap:"12px",margin:"16px 0"}}>
+                            <div style={{height:"1px",background:"#e2e8f0",flex:1}}/>
+                            <span style={{fontSize:"13px",color:"#94a3b8",fontWeight:600}}>OR</span>
+                            <div style={{height:"1px",background:"#e2e8f0",flex:1}}/>
+                          </div>
+                          <label style={{display:"block",width:"100%",padding:"16px 20px",borderRadius:"16px",border:"2px solid #fecaca",background:"#fff",color:"#dc2626",fontSize:"16px",fontWeight:700,cursor:"pointer",textAlign:"center"}}>
+                            Upload Letter Image
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={handleLetterUpload}
+                              style={{display:"none"}}
+                            />
+                          </label>
                         </Card>
                       )}
 
