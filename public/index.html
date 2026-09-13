@@ -350,6 +350,42 @@
         }
       };
 
+      const handleCardUpload = async (event) => {
+        const input = event.target;
+        const file = input.files?.[0];
+
+        if (!file) return;
+
+        stopCamera();
+        setCameraError("");
+        setScanState("processing");
+        setOcrProgress(0);
+
+        try {
+          const result = await Tesseract.recognize(
+            file,
+            "eng",
+            {
+              logger: (m) => {
+                if (m.status === "recognizing text") {
+                  setOcrProgress(Math.round(m.progress * 100));
+                }
+              }
+            }
+          );
+
+          const extracted = extractCardData(result.data.text);
+          setScanData(extracted);
+          setScanState("done");
+        } catch (err) {
+          console.error("Upload OCR error:", err);
+          setScanState("error");
+          setCameraError("Failed to read uploaded card image. Please try another image.");
+        } finally {
+          input.value = "";
+        }
+      };
+
       const resetScanner = () => {
         setScanState("camera");
         setScanData(null);
@@ -747,6 +783,28 @@
                       Scan now
                     </button>
                   )}
+                  <div style={{marginTop:"16px"}}>
+                    <label
+                      style={{
+                        display:"inline-block",
+                        padding:"10px 18px",
+                        borderRadius:"10px",
+                        background:"#2563eb",
+                        color:"#fff",
+                        fontSize:"14px",
+                        fontWeight:600,
+                        cursor:"pointer"
+                      }}
+                    >
+                      Upload Card Image
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleCardUpload}
+                        style={{display:"none"}}
+                      />
+                    </label>
+                  </div>
 
                   {cameraError&&(
                     <PrimaryButton variant="blue" onClick={()=>{setCameraError("");autoScanTriggered.current=false;startCamera();}}>Try Again</PrimaryButton>
